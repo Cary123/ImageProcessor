@@ -17,7 +17,7 @@ class ToolBar(QWidget):
         self.setMaximumWidth(80)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
 
         self.group = QButtonGroup(self)
@@ -29,6 +29,11 @@ class ToolBar(QWidget):
             ("crop", "裁剪"),
             ("inpaint", "擦除"),
             ("brush", "画笔"),
+            ("eraser", "橡皮"),
+            ("rect_select", "方选"),
+            ("free_select", "套索"),
+            ("clone_stamp", "图章"),
+            ("move", "移动"),
             ("sprite", "精灵图"),
             ("adjust", "调色"),
         ]
@@ -37,7 +42,7 @@ class ToolBar(QWidget):
             button = QPushButton(label)
             button.setCheckable(True)
             button.setProperty("tool_id", tool_id)
-            button.setMinimumHeight(48)
+            button.setMinimumHeight(40)
             self.group.addButton(button)
             layout.addWidget(button)
             button.clicked.connect(lambda _checked, tid=tool_id: self.tool_selected.emit(tid))
@@ -53,3 +58,9 @@ class ToolBar(QWidget):
         tool_id = button.property("tool_id")
         if tool_id:
             self.tool_selected.emit(tool_id)
+
+    def set_tool_checked(self, tool_id: str) -> None:
+        for button in self.group.buttons():
+            if button.property("tool_id") == tool_id:
+                button.setChecked(True)
+                return

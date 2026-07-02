@@ -24,6 +24,7 @@ class CropPanel(QWidget):
     request_crop = Signal(dict)
     request_rotate = Signal(dict)
     request_flip = Signal(dict)
+    crop_values_changed = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -69,6 +70,9 @@ class CropPanel(QWidget):
         self.aspect_combo.currentIndexChanged.connect(self._on_aspect_changed)
         crop_form.addRow("比例:", self.aspect_combo)
 
+        for spin in (self.left_spin, self.top_spin, self.right_spin, self.bottom_spin):
+            spin.valueChanged.connect(self._on_values_changed)
+
         layout.addLayout(crop_form)
 
         self.crop_button = QPushButton("应用裁剪")
@@ -112,6 +116,16 @@ class CropPanel(QWidget):
         self.bottom_spin.setRange(0, height)
         self.right_spin.setValue(width)
         self.bottom_spin.setValue(height)
+
+    def _on_values_changed(self) -> None:
+        self.crop_values_changed.emit({
+            "box": (
+                self.left_spin.value(),
+                self.top_spin.value(),
+                self.right_spin.value(),
+                self.bottom_spin.value(),
+            ),
+        })
 
     def _on_aspect_changed(self, index: int) -> None:
         if not (self.right_spin.value() and self.bottom_spin.value()):

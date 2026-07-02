@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent, QKeyEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -33,7 +34,7 @@ from image_processor.gui.panels.crop_panel import CropPanel
 from image_processor.gui.panels.inpaint_panel import InpaintPanel
 from image_processor.gui.panels.matting_panel import MattingPanel
 from image_processor.gui.panels.resize_panel import ResizePanel
-from image_processor.gui.panels.sprite_panel import SpritePanel
+from image_processor.gui.widgets.sprite_editor import SpriteEditor
 from image_processor.gui.toolbar import ToolBar
 from image_processor.gui.widgets.batch_dialog import BatchDialog
 from image_processor.gui.widgets.compare_dialog import CompareDialog
@@ -64,6 +65,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._update_status()
+        self.canvas.setFocus()
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -93,7 +95,7 @@ class MainWindow(QMainWindow):
         self.crop_panel = CropPanel()
         self.inpaint_panel = InpaintPanel()
         self.brush_panel = BrushPanel()
-        self.sprite_panel = SpritePanel()
+        self.sprite_panel = SpriteEditor()
         self.adjust_panel = AdjustPanel()
 
         self.panel_stack.addWidget(self.matting_panel)
@@ -136,8 +138,12 @@ class MainWindow(QMainWindow):
         bottom_layout.addWidget(self.zoom_reset_button)
 
         self.zoom_label = QLabel("100%")
-        self.zoom_label.setMinimumWidth(50)
+        self.zoom_label.setMinimumWidth(60)
         bottom_layout.addWidget(self.zoom_label)
+
+        self.coord_label = QLabel("坐标: --, --")
+        self.coord_label.setMinimumWidth(120)
+        bottom_layout.addWidget(self.coord_label)
 
         main_layout.addWidget(bottom_panel)
 
@@ -145,8 +151,15 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximumWidth(200)
         self.progress_bar.setVisible(False)
 
+        self.status_zoom_label = QLabel("100%")
+        self.status_zoom_label.setMinimumWidth(60)
+        self.status_coord_label = QLabel("--, -- px")
+        self.status_coord_label.setMinimumWidth(90)
+
         self.status_bar = QStatusBar()
         self.status_bar.addPermanentWidget(self.progress_bar)
+        self.status_bar.addPermanentWidget(self.status_zoom_label)
+        self.status_bar.addPermanentWidget(self.status_coord_label)
         self.setStatusBar(self.status_bar)
 
         self._build_menu()
@@ -208,6 +221,18 @@ class MainWindow(QMainWindow):
         redo_action.triggered.connect(self._redo)
         edit_menu.addAction(redo_action)
 
+        edit_menu.addSeparator()
+
+        copy_action = QAction("复制", self)
+        copy_action.setShortcut("Ctrl+C")
+        copy_action.triggered.connect(self._copy_selection)
+        edit_menu.addAction(copy_action)
+
+        paste_action = QAction("粘贴", self)
+        paste_action.setShortcut("Ctrl+V")
+        paste_action.triggered.connect(self._paste_selection)
+        edit_menu.addAction(paste_action)
+
         view_menu = menu.addMenu("查看")
 
         prev_action = QAction("上一张", self)
@@ -248,7 +273,7 @@ class MainWindow(QMainWindow):
         self.crop_panel.request_rotate.connect(self._run_rotate)
         self.crop_panel.request_flip.connect(self._run_flip)
         self.inpaint_panel.request_inpaint.connect(self._run_inpaint)
-        self.brush_panel.brush_mode_changed.connect(self.canvas.set_brush_mode)
+        self.brush_panel.brush_mode_changed.connect(self._on_brush_mode_changed)
         self.brush_panel.brush_size_changed.connect(self.canvas.set_brush_size)
         self.brush_panel.brush_hardness_changed.connect(self.canvas.set_brush_hardness)
         self.brush_panel.apply_brush.connect(self.canvas.apply_brush)
@@ -258,6 +283,13 @@ class MainWindow(QMainWindow):
         self.adjust_panel.adjustment_preview.connect(self._preview_adjust)
         self.adjust_panel.adjustment_applied.connect(self._apply_adjust)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
+        self.canvas.cursor_moved.connect(self._on_cursor_moved)
+        self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
+        self.crop_panel.crop_values_changed.connect(self._on_crop_values_changed)
+
+    def _on_brush_mode_changed(self, mode: str) -> None:
+        self.canvas.set_brush_mode(mode)
+        self.toolbar.set_tool_checked(mode)
 
     def _on_tool_selected(self, tool: str) -> None:
         mapping = {
@@ -266,22 +298,41 @@ class MainWindow(QMainWindow):
             "crop": 2,
             "inpaint": 3,
             "brush": 4,
+            "eraser": 4,
+            "rect_select": 4,
+            "free_select": 4,
+            "clone_stamp": 4,
+            "move": 4,
             "sprite": 5,
             "adjust": 6,
         }
         self.panel_stack.setCurrentIndex(mapping.get(tool, 0))
+        if tool in ("brush", "eraser"):
+            self.brush_panel.set_mode("brush" if tool == "brush" else "eraser")
+            self.canvas.set_brush_mode("brush" if tool == "brush" else "eraser")
+        else:
+            self.canvas.set_brush_mode(None)
+        if tool in ("rect_select", "free_select", "crop", "clone_stamp", "move"):
+            self.canvas.set_tool(tool)
+        elif tool == "navigator":
+            self.canvas.set_tool("navigator")
         if tool == "sprite":
             self.sprite_panel.set_images([item.source_path for item in self.images])
         if tool == "crop" and 0 <= self.current_index < len(self.images):
             item = self.images[self.current_index]
             self.crop_panel.set_image_size(item.width, item.height)
+            self.canvas.set_tool("crop")
+            self.canvas.crop_rect = (
+                self.crop_panel.left_spin.value() - item.width // 2,
+                self.crop_panel.top_spin.value() - item.height // 2,
+                self.crop_panel.right_spin.value() - item.width // 2,
+                self.crop_panel.bottom_spin.value() - item.height // 2,
+            )
+            self.canvas.refresh_crop_tool()
         if tool == "brush" and 0 <= self.current_index < len(self.images):
             item = self.images[self.current_index]
             original = item.history._stack[0].image if item.history._stack else item.image
             self.canvas.start_brush_session(item.image, original)
-            self.canvas.set_brush_mode(self.brush_panel.current_mode())
-        else:
-            self.canvas.set_brush_mode(None)
 
     def _update_recent_menu(self) -> None:
         self.recent_menu.clear()
@@ -441,7 +492,57 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("就绪 | 0 张图片")
         else:
             current = self.current_index + 1 if self.current_index >= 0 else 0
-            self.status_bar.showMessage(f"就绪 | {current}/{total} 张图片 | 缩放 {int(self.canvas.transform().m11() * 100)}%")
+            self.status_bar.showMessage(f"就绪 | {current}/{total} 张图片")
+
+    def _on_crop_rect_changed(self, rect: tuple[float, float, float, float]) -> None:
+        layer = self.canvas.active_layer()
+        if layer is None:
+            return
+        left = int(rect[0] - layer.x)
+        top = int(rect[1] - layer.y)
+        right = int(rect[2] - layer.x)
+        bottom = int(rect[3] - layer.y)
+        self.crop_panel.left_spin.blockSignals(True)
+        self.crop_panel.top_spin.blockSignals(True)
+        self.crop_panel.right_spin.blockSignals(True)
+        self.crop_panel.bottom_spin.blockSignals(True)
+        self.crop_panel.left_spin.setValue(max(0, left))
+        self.crop_panel.top_spin.setValue(max(0, top))
+        self.crop_panel.right_spin.setValue(max(0, right))
+        self.crop_panel.bottom_spin.setValue(max(0, bottom))
+        self.crop_panel.left_spin.blockSignals(False)
+        self.crop_panel.top_spin.blockSignals(False)
+        self.crop_panel.right_spin.blockSignals(False)
+        self.crop_panel.bottom_spin.blockSignals(False)
+
+    def _on_crop_values_changed(self, options: dict[str, Any]) -> None:
+        layer = self.canvas.active_layer()
+        if layer is None:
+            return
+        box = options.get("box")
+        if box is not None:
+            left, top, right, bottom = box
+            self.canvas.crop_rect = (left + layer.x, top + layer.y, right + layer.x, bottom + layer.y)
+            self.canvas.refresh_crop_tool()
+
+    def _on_cursor_moved(self, x: int, y: int) -> None:
+        if x < 0 or y < 0:
+            self.coord_label.setText("坐标: --, --")
+            self.status_coord_label.setText("--, -- px")
+        else:
+            self.coord_label.setText(f"坐标: {x}, {y}")
+            self.status_coord_label.setText(f"{x}, {y} px")
+
+    def _copy_selection(self) -> None:
+        self.canvas.copy_selection()
+        self._show_toast("已复制选区")
+
+    def _paste_selection(self) -> None:
+        pasted = self.canvas.paste_selection()
+        if pasted is not None:
+            self._show_toast(f"已粘贴图层: {pasted.width}x{pasted.height}")
+        else:
+            self._show_toast("剪贴板为空")
 
     def _update_navigation_buttons(self) -> None:
         total = len(self.images)
@@ -450,6 +551,7 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, scale: float) -> None:
         self.zoom_label.setText(f"{int(scale * 100)}%")
+        self.status_zoom_label.setText(f"{int(scale * 100)}%")
         self._update_status()
 
     def _show_toast(self, message: str) -> None:
@@ -518,6 +620,10 @@ class MainWindow(QMainWindow):
             return
 
         item = self.images[self.current_index]
+        merged = self.canvas.export_image()
+        if self.canvas.active_layer() is None:
+            merged = item.image
+
         path_str, selected_filter = QFileDialog.getSaveFileName(
             self,
             "导出图片",
@@ -530,7 +636,7 @@ class MainWindow(QMainWindow):
         try:
             fmt = "PNG" if "PNG" in selected_filter else "JPEG" if "JPEG" in selected_filter else "WEBP"
             quality = 95 if fmt in {"JPEG", "WEBP"} else -1
-            export_image(item.image, Path(path_str), format=fmt, quality=quality)
+            export_image(merged, Path(path_str), format=fmt, quality=quality)
             self._show_toast(f"已导出: {path_str}")
             self.status_bar.showMessage(f"已导出: {path_str}", 5000)
         except EngineError as exc:
@@ -691,8 +797,12 @@ class MainWindow(QMainWindow):
         from image_processor.core.image_engine import crop_image
 
         item = self.images[self.current_index]
+        box = options.get("box") or self.canvas.get_crop_box()
+        if box is None:
+            QMessageBox.information(self, "提示", "请先在画布上拖拽选择裁剪区域")
+            return
         try:
-            result = crop_image(item.image, box=options["box"])
+            result = crop_image(item.image, box=box)
             item.replace(result, description="裁剪")
             self.canvas.set_image(result)
             self.crop_panel.set_image_size(result.width, result.height)
@@ -741,7 +851,8 @@ class MainWindow(QMainWindow):
             return
         item = self.images[self.current_index]
         item.replace(result, description="画笔修复")
-        self.canvas.set_image(result)
+        original = item.history._stack[0].image if item.history._stack else item.image
+        self.canvas.start_brush_session(item.image, original)
         self._show_toast("画笔修复已应用")
         self.status_bar.showMessage("画笔修复已应用", 5000)
 

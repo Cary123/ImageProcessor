@@ -101,6 +101,12 @@ class BrushPanel(QWidget):
     def current_mode(self) -> str:
         return "brush" if self.brush_radio.isChecked() else "eraser"
 
+    def set_mode(self, mode: str) -> None:
+        if mode == "brush":
+            self.brush_radio.setChecked(True)
+        else:
+            self.eraser_radio.setChecked(True)
+
     def current_options(self) -> dict[str, Any]:
         return {
             "mode": self.current_mode(),
