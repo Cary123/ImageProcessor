@@ -1,0 +1,11 @@
+# Core image processing
+Pillow>=10.4.0
+rembg[cpu]>=2.0.57
+opencv-python>=4.10.0
+numpy>=1.26.4
+
+# GUI framework
+PySide6>=6.7.2
+
+# Packaging
+PyInstaller>=6.0.0
