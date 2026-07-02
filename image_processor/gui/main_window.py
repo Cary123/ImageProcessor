@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self.images: list[ImageItem] = []
         self.current_index = -1
         self.recent_files = RecentFilesManager()
+        self._matting_item: ImageItem | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -549,23 +550,28 @@ class MainWindow(QMainWindow):
             )
 
         item = self.images[self.current_index]
+        self._matting_item = item
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.status_bar.showMessage("正在抠图...")
 
         worker = MattingWorker(item.image, options)
-        worker.signals.progress.connect(self.progress_bar.setValue)
-        worker.signals.finished.connect(lambda result: self._on_matting_finished(item, result))
-        worker.signals.error.connect(lambda message: self._on_matting_error(message))
+        worker.signals.progress.connect(self.progress_bar.setValue, type=Qt.QueuedConnection)
+        worker.signals.finished.connect(self._on_matting_finished, type=Qt.QueuedConnection)
+        worker.signals.error.connect(self._on_matting_error, type=Qt.QueuedConnection)
         self.thread_pool.start(worker)
 
-    def _on_matting_finished(self, item: ImageItem, result: object) -> None:
-        item.replace(result, description="抠图")
+    def _on_matting_finished(self, result: object) -> None:
+        if self._matting_item is None:
+            self.progress_bar.setVisible(False)
+            return
+        self._matting_item.replace(result, description="抠图")
         self.canvas.set_image(result)
         self._show_toast("抠图完成")
         self.status_bar.showMessage("抠图完成", 5000)
         self.progress_bar.setVisible(False)
+        self._matting_item = None
 
     def _on_matting_error(self, message: str) -> None:
         QMessageBox.critical(self, "抠图失败", message)

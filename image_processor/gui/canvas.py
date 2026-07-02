@@ -44,7 +44,7 @@ class ImageCanvas(QGraphicsView):
     def _set_checkerboard_background(self, width: int, height: int) -> None:
         board = create_checkerboard(width, height, cell_size=self._checkerboard_size)
         self.scene.setBackgroundBrush(self._qbrush_from_pil(board))
-        self.scene.setSceneRect(0, 0, width, height)
+        self.scene.setSceneRect(-width / 2, -height / 2, width, height)
 
     def _qbrush_from_pil(self, image: Image.Image) -> QPixmap:
         data = np.array(image.convert("RGB"))
