@@ -31,10 +31,11 @@ from image_processor.gui.canvas import ImageCanvas
 from image_processor.gui.panels.adjust_panel import AdjustPanel
 from image_processor.gui.panels.brush_panel import BrushPanel
 from image_processor.gui.panels.crop_panel import CropPanel
+from image_processor.gui.panels.grid_panel import GridPanel
 from image_processor.gui.panels.inpaint_panel import InpaintPanel
 from image_processor.gui.panels.matting_panel import MattingPanel
 from image_processor.gui.panels.resize_panel import ResizePanel
-from image_processor.gui.widgets.sprite_editor import SpriteEditor
+from image_processor.gui.widgets.sprite_editor import SpriteEditor, SpriteEditorWindow
 from image_processor.gui.toolbar import ToolBar
 from image_processor.gui.widgets.batch_dialog import BatchDialog
 from image_processor.gui.widgets.compare_dialog import CompareDialog
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         self.current_index = -1
         self.recent_files = RecentFilesManager()
         self._matting_item: ImageItem | None = None
+        self._sprite_window: SpriteEditorWindow | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -95,6 +97,7 @@ class MainWindow(QMainWindow):
         self.crop_panel = CropPanel()
         self.inpaint_panel = InpaintPanel()
         self.brush_panel = BrushPanel()
+        self.grid_panel = GridPanel()
         self.sprite_panel = SpriteEditor()
         self.adjust_panel = AdjustPanel()
 
@@ -103,6 +106,7 @@ class MainWindow(QMainWindow):
         self.panel_stack.addWidget(self.crop_panel)
         self.panel_stack.addWidget(self.inpaint_panel)
         self.panel_stack.addWidget(self.brush_panel)
+        self.panel_stack.addWidget(self.grid_panel)
         self.panel_stack.addWidget(self.sprite_panel)
         self.panel_stack.addWidget(self.adjust_panel)
 
@@ -279,9 +283,9 @@ class MainWindow(QMainWindow):
         self.brush_panel.apply_brush.connect(self.canvas.apply_brush)
         self.brush_panel.cancel_brush.connect(self.canvas.cancel_brush)
         self.canvas.brush_applied.connect(self._on_brush_applied)
-        self.sprite_panel.request_sprite.connect(self._run_sprite)
         self.adjust_panel.adjustment_preview.connect(self._preview_adjust)
         self.adjust_panel.adjustment_applied.connect(self._apply_adjust)
+        self.grid_panel.grid_changed.connect(self.canvas.set_grid_options)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
         self.canvas.cursor_moved.connect(self._on_cursor_moved)
         self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
@@ -303,8 +307,9 @@ class MainWindow(QMainWindow):
             "free_select": 4,
             "clone_stamp": 4,
             "move": 4,
-            "sprite": 5,
-            "adjust": 6,
+            "grid": 5,
+            "sprite": 6,
+            "adjust": 7,
         }
         self.panel_stack.setCurrentIndex(mapping.get(tool, 0))
         if tool in ("brush", "eraser"):
@@ -317,7 +322,10 @@ class MainWindow(QMainWindow):
         elif tool == "navigator":
             self.canvas.set_tool("navigator")
         if tool == "sprite":
-            self.sprite_panel.set_images([item.source_path for item in self.images])
+            self._open_sprite_editor()
+            return
+        if tool == "grid" and 0 <= self.current_index < len(self.images):
+            self.canvas.set_grid_options(self.grid_panel.current_options())
         if tool == "crop" and 0 <= self.current_index < len(self.images):
             item = self.images[self.current_index]
             self.crop_panel.set_image_size(item.width, item.height)
@@ -333,6 +341,22 @@ class MainWindow(QMainWindow):
             item = self.images[self.current_index]
             original = item.history._stack[0].image if item.history._stack else item.image
             self.canvas.start_brush_session(item.image, original)
+
+    def _open_sprite_editor(self) -> None:
+        if self._sprite_window is None:
+            self._sprite_window = SpriteEditorWindow(self)
+            self._sprite_window.closed.connect(self._on_sprite_editor_closed)
+        self._sprite_window.set_images([item.source_path for item in self.images])
+        self._sprite_window.show()
+        self._sprite_window.raise_()
+        self._sprite_window.activateWindow()
+        self.hide()
+
+    def _on_sprite_editor_closed(self) -> None:
+        self._sprite_window = None
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _update_recent_menu(self) -> None:
         self.recent_menu.clear()

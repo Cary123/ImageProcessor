@@ -34,6 +34,7 @@ class ToolBar(QWidget):
             ("free_select", "套索"),
             ("clone_stamp", "图章"),
             ("move", "移动"),
+            ("grid", "网格"),
             ("sprite", "精灵图"),
             ("adjust", "调色"),
         ]

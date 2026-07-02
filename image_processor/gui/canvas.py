@@ -23,6 +23,7 @@ from image_processor.gui.tools import (
     RectangleSelectTool,
     Tool,
 )
+from image_processor.gui.widgets.grid_overlay import GridOverlay
 
 
 class ImageCanvas(QGraphicsView):
@@ -64,6 +65,10 @@ class ImageCanvas(QGraphicsView):
             name="默认",
             image=Image.new("RGBA", (512, 512), (0, 0, 0, 0)),
         )
+        self._grid_overlay = GridOverlay()
+        self.scene.addItem(self._grid_overlay)
+        self._grid_options: dict[str, Any] = {"visible": False, "rows": 4, "cols": 4}
+
         self._layers.set_checkerboard(512, 512, cell_size=self._checkerboard_size)
         self._center_on_checkerboard()
 
@@ -110,6 +115,7 @@ class ImageCanvas(QGraphicsView):
             y=-image.height // 2,
         )
         self._layers.set_scene_rect(image.width, image.height)
+        self._update_grid_overlay()
         self.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
         self.zoom_changed.emit(self.transform().m11())
         self._set_tool("navigator")
@@ -122,11 +128,29 @@ class ImageCanvas(QGraphicsView):
         self.crop_rect = None
         self._layers.set_checkerboard(512, 512, cell_size=self._checkerboard_size)
         self._layers.set_scene_rect(512, 512)
+        self._update_grid_overlay()
         self._center_on_checkerboard()
         self._set_tool("navigator")
 
     def active_layer(self) -> Layer | None:
         return self._layers.active_image_layer()
+
+    def _update_grid_overlay(self) -> None:
+        layer = self.active_layer()
+        if layer is None:
+            self._grid_overlay.set_rect(0, 0, 0, 0)
+            return
+        self._grid_overlay.set_rect(layer.x, layer.y, layer.width, layer.height)
+        self._grid_overlay.set_grid(self._grid_options.get("rows", 4), self._grid_options.get("cols", 4))
+        self._grid_overlay.set_visible(self._grid_options.get("visible", False))
+
+    def set_grid_options(self, options: dict[str, Any]) -> None:
+        self._grid_options = {
+            "visible": options.get("visible", False),
+            "rows": max(1, options.get("rows", 4)),
+            "cols": max(1, options.get("cols", 4)),
+        }
+        self._update_grid_overlay()
 
     def set_checkerboard_size(self, size: int) -> None:
         self._checkerboard_size = max(4, size)
