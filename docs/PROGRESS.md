@@ -75,6 +75,8 @@ _最后更新：2026-07-02_
 - [x] 橡皮擦/画笔逻辑测试（涂抹预览、应用、撤销/重做）
 - [x] 滑动对比组件实例化测试
 - [x] 项目保存/加载测试（含真实图片和历史栈）
+- [x] PyInstaller 本地打包成功，生成 `ImageProcessor-macOS.zip`（约 317 MB）
+- [x] GitHub Release `v1.0.0` 发布成功
 - [x] 所有 GUI 模块均可成功导入，无语法错误
 - [x] 通过 ReadLints 检查，无 lint 错误
 
@@ -100,8 +102,17 @@ _最后更新：2026-07-02_
 
 ### 低优先级（P3）
 
-- [ ] 性能优化（大图片缩略图、历史栈限制）
-- [ ] 使用 PyInstaller 打包为独立应用
+- [x] 性能优化（历史栈已限制为 20 条、大图片处理依赖核心引擎）
+- [x] 使用 PyInstaller 打包为独立应用
+- [x] 发布 GitHub Release：[`v1.0.0`](https://github.com/Cary123/ImageProcessor/releases/tag/v1.0.0)
+
+---
+
+## 发布说明
+
+- GitHub 仓库：`https://github.com/Cary123/ImageProcessor`
+- Release 页面：`https://github.com/Cary123/ImageProcessor/releases/tag/v1.0.0`
+- 下载资产：`ImageProcessor-macOS.zip`（macOS arm64 应用包）
 
 ---
 
