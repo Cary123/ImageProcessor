@@ -105,6 +105,7 @@ _最后更新：2026-07-02_
 - [x] 性能优化（历史栈已限制为 20 条、大图片处理依赖核心引擎）
 - [x] 使用 PyInstaller 打包为独立应用
 - [x] 发布 GitHub Release：[`v1.0.0`](https://github.com/Cary123/ImageProcessor/releases/tag/v1.0.0)
+- [x] 发布 GitHub Release：[`v1.0.1`](https://github.com/Cary123/ImageProcessor/releases/tag/v1.0.1)（修复居中显示和抠图崩溃）
 
 ---
 
