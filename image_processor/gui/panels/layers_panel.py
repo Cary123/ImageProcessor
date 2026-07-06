@@ -62,14 +62,13 @@ class LayersPanel(QWidget):
 
         top_bar = QHBoxLayout()
         top_bar.setSpacing(6)
-        top_bar.addWidget(QLabel("图层"))
+        top_bar.addStretch()
         self.new_button = QPushButton()
         self.new_button.setFixedSize(32, 32)
         self.new_button.setIcon(get_svg_icon("new_layer", 18))
         self.new_button.setToolTip("新建图层")
         self.new_button.clicked.connect(self.new_layer_requested.emit)
         top_bar.addWidget(self.new_button)
-        top_bar.addStretch()
         layout.addLayout(top_bar)
 
         self.list_widget = QListWidget()

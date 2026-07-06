@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QButtonGroup, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
+from image_processor.gui.widgets.edge_shadow import EdgeShadow
 from image_processor.gui.widgets.icons import get_svg_icon
 from image_processor.gui.widgets.tool_button import ToolIconButton
-from image_processor.utils.themes import DARK_BG_SECONDARY, DARK_BORDER_SUBTLE, is_dark_mode
+from image_processor.utils.themes import DARK_BG_SECONDARY, is_dark_mode
 
 
 class ToolBar(QWidget):
@@ -18,11 +19,16 @@ class ToolBar(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setMaximumWidth(80)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(6)
-        layout.setContentsMargins(12, 10, 8, 10)
+        outer = QHBoxLayout(self)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._panel = QWidget()
+        self._panel.setMaximumWidth(52)
+        layout = QVBoxLayout(self._panel)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 4, 6)
 
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
@@ -43,8 +49,8 @@ class ToolBar(QWidget):
         for tool_id, label in tools:
             button = ToolIconButton()
             button.setProperty("tool_id", tool_id)
-            button.setFixedSize(48, 48)
-            button.set_tool_icon(get_svg_icon(tool_id), 24)
+            button.setFixedSize(36, 36)
+            button.set_tool_icon(get_svg_icon(tool_id), 20)
             button.setToolTip(label)
             self.group.addButton(button)
             layout.addWidget(button)
@@ -54,6 +60,10 @@ class ToolBar(QWidget):
             self.group.buttons()[0].setChecked(True)
 
         layout.addStretch()
+
+        outer.addWidget(self._panel)
+        self._right_shadow = EdgeShadow(EdgeShadow.RIGHT)
+        outer.addWidget(self._right_shadow)
 
     def set_tool_checked(self, tool_id: str | None) -> None:
         for button in self.group.buttons():
@@ -65,13 +75,11 @@ class ToolBar(QWidget):
 
     def refresh_icons(self) -> None:
         if is_dark_mode():
-            self.setStyleSheet(
-                f"background-color: {DARK_BG_SECONDARY}; "
-                f"border-right: 1px solid {DARK_BORDER_SUBTLE};"
-            )
+            self._panel.setStyleSheet(f"background-color: {DARK_BG_SECONDARY};")
         else:
-            self.setStyleSheet("background-color: #F3F4F6; border-right: 1px solid #E5E7EB;")
+            self._panel.setStyleSheet("background-color: #F3F4F6;")
+        self._right_shadow.update()
         for button in self.group.buttons():
             tool_id = button.property("tool_id")
             if tool_id:
-                button.set_tool_icon(get_svg_icon(tool_id), 24)
+                button.set_tool_icon(get_svg_icon(tool_id), 20)

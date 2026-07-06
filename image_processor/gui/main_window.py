@@ -50,7 +50,7 @@ from image_processor.gui.widgets.toast import Toast
 from image_processor.models.image_item import ImageItem
 from image_processor.utils.helpers import collect_images, is_matting_model_available
 from image_processor.utils.recent_files import RecentFilesManager
-from image_processor.utils.themes import apply_theme, gallery_frame_stylesheet, gallery_hint_stylesheet
+from image_processor.utils.themes import apply_theme, gallery_frame_stylesheet, side_panel_tab_stylesheet
 from image_processor.gui.widgets.icons import get_icon
 
 
@@ -118,9 +118,6 @@ class MainWindow(QMainWindow):
         self.toolbar = ToolBar()
         content_layout.addWidget(self.toolbar)
 
-        self.content_splitter = QSplitter(Qt.Horizontal)
-        content_layout.addWidget(self.content_splitter, 1)
-
         center_widget = QWidget()
         center_layout = QVBoxLayout(center_widget)
         center_layout.setSpacing(0)
@@ -130,11 +127,11 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.canvas, 1)
 
         gallery_layout = QHBoxLayout()
-        gallery_layout.setSpacing(6)
-        gallery_layout.setContentsMargins(6, 4, 6, 4)
+        gallery_layout.setSpacing(4)
+        gallery_layout.setContentsMargins(4, 2, 4, 2)
 
         self.prev_button = QPushButton()
-        self.prev_button.setFixedSize(36, 64)
+        self.prev_button.setFixedSize(28, 48)
         self.prev_button.setIcon(get_icon("prev", size=20))
         self.prev_button.setToolTip("上一张")
         self.prev_button.setEnabled(False)
@@ -144,21 +141,16 @@ class MainWindow(QMainWindow):
         self.gallery_frame = QFrame()
         self.gallery_frame.setFrameShape(QFrame.StyledPanel)
         gallery_frame_layout = QVBoxLayout(self.gallery_frame)
-        gallery_frame_layout.setSpacing(4)
-        gallery_frame_layout.setContentsMargins(4, 4, 4, 4)
+        gallery_frame_layout.setSpacing(0)
+        gallery_frame_layout.setContentsMargins(2, 2, 2, 2)
 
         self.gallery = ImageGallery()
-        gallery_frame_layout.addWidget(self.gallery, 1)
-
-        self.gallery_hint = QLabel("拖拽图片到这里显示")
-        self.gallery_hint.setAlignment(Qt.AlignCenter)
-        self.gallery_hint.setWordWrap(True)
-        gallery_frame_layout.addWidget(self.gallery_hint)
+        gallery_frame_layout.addWidget(self.gallery)
 
         gallery_layout.addWidget(self.gallery_frame, 1)
 
         self.next_button = QPushButton()
-        self.next_button.setFixedSize(36, 64)
+        self.next_button.setFixedSize(28, 48)
         self.next_button.setIcon(get_icon("next", size=20))
         self.next_button.setToolTip("下一张")
         self.next_button.setEnabled(False)
@@ -188,8 +180,6 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
 
         self.panel_stack = QStackedWidget()
-        self.panel_stack.setMinimumWidth(260)
-        self.panel_stack.setMaximumWidth(360)
 
         self.matting_panel = MattingPanel()
         self.resize_panel = ResizePanel()
@@ -207,16 +197,30 @@ class MainWindow(QMainWindow):
         self.panel_stack.addWidget(self.grid_panel)
         self.panel_stack.addWidget(self.adjust_panel)
 
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
+        general_layout.setContentsMargins(0, 0, 0, 0)
+        general_layout.setSpacing(0)
+        general_layout.addWidget(self.panel_stack)
+
         self.layers_panel = LayersPanel()
-        self.layers_panel.setMinimumWidth(260)
-        self.layers_panel.setMaximumWidth(360)
 
-        right_layout.addWidget(self.panel_stack, 2)
-        right_layout.addWidget(self.layers_panel, 1)
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setMinimumWidth(260)
+        self.right_tabs.setMaximumWidth(360)
+        self.right_tabs.addTab(general_tab, "通用")
+        self.right_tabs.addTab(self.layers_panel, "图层")
 
+        right_layout.addWidget(self.right_tabs)
+
+        self.content_splitter = QSplitter(Qt.Horizontal)
+        self.content_splitter.setHandleWidth(3)
+        self.content_splitter.setChildrenCollapsible(False)
         self.content_splitter.addWidget(center_widget)
         self.content_splitter.addWidget(right_panel)
         self.content_splitter.setSizes([700, 260])
+
+        content_layout.addWidget(self.content_splitter, 1)
 
         editor_layout.addLayout(content_layout, 1)
         return editor
@@ -437,6 +441,8 @@ class MainWindow(QMainWindow):
             "adjust": 6,
         }
         self.panel_stack.setCurrentIndex(mapping.get(tool, 0))
+        if self.right_tabs.currentIndex() != 0:
+            self.right_tabs.setCurrentIndex(0)
         if tool in ("brush", "eraser"):
             self.brush_panel.set_mode("brush" if tool == "brush" else "eraser")
             self.canvas.set_brush_mode("brush" if tool == "brush" else "eraser")
@@ -598,10 +604,6 @@ class MainWindow(QMainWindow):
         images = [item.image for item in self.images]
         names = [item.name for item in self.images]
         self.gallery.set_images(images, names, self.current_index)
-        if self.images:
-            self.gallery_hint.setText(f"已加载 {len(self.images)} 张图片")
-        else:
-            self.gallery_hint.setText("拖拽图片到这里显示")
         self._update_navigation_buttons()
 
     def _undo(self) -> None:
@@ -747,10 +749,11 @@ class MainWindow(QMainWindow):
 
     def _apply_editor_theme_styles(self) -> None:
         self.gallery_frame.setStyleSheet(gallery_frame_stylesheet())
-        self.gallery_hint.setStyleSheet(gallery_hint_stylesheet())
         self.gallery.apply_theme_styles()
         self.color_bar.refresh_theme()
         self.toolbar.refresh_icons()
+        self.right_tabs.setStyleSheet(side_panel_tab_stylesheet())
+        self.sprite_editor.zoom_combo.apply_theme_styles()
         self.prev_button.setIcon(get_icon("prev", size=20))
         self.next_button.setIcon(get_icon("next", size=20))
         self.canvas.apply_theme_styles()

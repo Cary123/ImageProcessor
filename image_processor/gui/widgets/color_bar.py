@@ -5,8 +5,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QButtonGroup, QColorDialog, QFrame, QHBoxLayout, QPushButton, QWidget
+from PySide6.QtWidgets import QButtonGroup, QColorDialog, QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
+from image_processor.gui.widgets.edge_shadow import EdgeShadow
 from image_processor.gui.widgets.icons import get_svg_icon
 from image_processor.gui.widgets.tool_button import ToolIconButton
 from image_processor.gui.widgets.zoom_combo import ZoomComboBox
@@ -43,7 +44,7 @@ class _ColorButton(QPushButton):
 
     def __init__(self, label: str, color: QColor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(40, 40)
+        self.setFixedSize(30, 30)
         self.setToolTip(label)
         self._color = color
         self._selected = False
@@ -64,7 +65,7 @@ class _ColorButton(QPushButton):
     def _update_style(self) -> None:
         border_color = color_button_border(self._selected)
         self.setStyleSheet(
-            f"background-color: {self._color.name()}; border: 3px solid {border_color}; border-radius: 4px;"
+            f"background-color: {self._color.name()}; border: 2px solid {border_color}; border-radius: 3px;"
         )
 
 
@@ -82,10 +83,15 @@ class ColorBar(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QHBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(8, 10, 8, 10)
-        self.setMinimumHeight(60)
+        outer = QVBoxLayout(self)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._content = QWidget()
+        self._content.setMinimumHeight(44)
+        layout = QHBoxLayout(self._content)
+        layout.setSpacing(5)
+        layout.setContentsMargins(6, 4, 6, 4)
 
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
@@ -99,8 +105,8 @@ class ColorBar(QWidget):
         for tool_id, tooltip in top_tools:
             button = ToolIconButton()
             button.setProperty("tool_id", tool_id)
-            button.setFixedSize(44, 44)
-            button.set_tool_icon(get_svg_icon(tool_id, size=28), 28)
+            button.setFixedSize(36, 36)
+            button.set_tool_icon(get_svg_icon(tool_id, size=22), 22)
             button.setToolTip(tooltip)
             self.tool_group.addButton(button)
             layout.addWidget(button)
@@ -112,7 +118,7 @@ class ColorBar(QWidget):
 
         divider = QFrame()
         divider.setFrameShape(QFrame.VLine)
-        divider.setFixedSize(2, 44)
+        divider.setFixedSize(2, 32)
         divider.setStyleSheet(color_bar_divider_stylesheet())
         self.divider = divider
         layout.addWidget(divider)
@@ -126,12 +132,12 @@ class ColorBar(QWidget):
         layout.addWidget(self.foreground_button)
         layout.addWidget(self.background_button)
 
-        layout.addSpacing(8)
+        layout.addSpacing(5)
 
         self._swatches: list[QPushButton] = []
         for hex_color in DEFAULT_SWATCHES:
             swatch = QPushButton()
-            swatch.setFixedSize(22, 22)
+            swatch.setFixedSize(18, 18)
             swatch.setStyleSheet(
                 f"background-color: {hex_color}; border: 1px solid {color_swatch_border()}; border-radius: 3px;"
             )
@@ -141,8 +147,8 @@ class ColorBar(QWidget):
             layout.addWidget(swatch)
 
         palette_button = QPushButton()
-        palette_button.setFixedSize(22, 22)
-        palette_button.setIcon(get_svg_icon("palette", size=18))
+        palette_button.setFixedSize(18, 18)
+        palette_button.setIcon(get_svg_icon("palette", size=14))
         palette_button.setToolTip("调色盘")
         palette_button.setStyleSheet("border: none; background-color: transparent;")
         palette_button.clicked.connect(self._pick_active_color)
@@ -150,6 +156,10 @@ class ColorBar(QWidget):
         layout.addWidget(palette_button)
 
         layout.addStretch()
+
+        outer.addWidget(self._content)
+        self._bottom_shadow = EdgeShadow(EdgeShadow.BOTTOM)
+        outer.addWidget(self._bottom_shadow)
 
     def _select_foreground(self) -> None:
         self._active_role = "foreground"
@@ -223,18 +233,20 @@ class ColorBar(QWidget):
     def refresh_theme(self) -> None:
         """Refresh icons and theme-dependent styles."""
         if is_dark_mode():
-            self.setStyleSheet(
+            self._content.setStyleSheet(
                 f"background-color: {DARK_BG_ELEVATED}; "
                 f"border-bottom: 1px solid {DARK_BORDER_SUBTLE};"
             )
         else:
-            self.setStyleSheet("background-color: #FFFFFF; border-bottom: 1px solid #E5E7EB;")
+            self._content.setStyleSheet("background-color: #FFFFFF; border-bottom: 1px solid #E5E7EB;")
+        self._bottom_shadow.update()
         for button in self.tool_group.buttons():
             tool_id = button.property("tool_id")
             if tool_id:
-                button.set_tool_icon(get_svg_icon(tool_id, size=28), 28)
-        self.palette_button.setIcon(get_svg_icon("palette", size=18))
+                button.set_tool_icon(get_svg_icon(tool_id, size=22), 22)
+        self.palette_button.setIcon(get_svg_icon("palette", size=14))
         self.divider.setStyleSheet(color_bar_divider_stylesheet())
+        self.zoom_combo.apply_theme_styles()
         self.foreground_button._update_style()
         self.background_button._update_style()
         swatch_border = color_swatch_border()

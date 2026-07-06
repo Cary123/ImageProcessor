@@ -3,12 +3,35 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QComboBox
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QPolygon
+from PySide6.QtWidgets import QComboBox, QStyle, QStyleOptionComboBox
+
+from image_processor.utils.themes import DARK_TEXT_MUTED, is_dark_mode, zoom_combo_stylesheet
 
 ZOOM_PRESETS = (25, 50, 75, 100, 200, 500)
 MIN_ZOOM_PERCENT = 10.0
 MAX_ZOOM_PERCENT = 500.0
+
+
+def _down_arrow_icon(color: QColor, width: int = 10, height: int = 6) -> QIcon:
+    pixmap = QPixmap(width, height)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawPolygon(
+        QPolygon(
+            [
+                QPoint(0, 0),
+                QPoint(width, 0),
+                QPoint(width // 2, height),
+            ]
+        )
+    )
+    painter.end()
+    return QIcon(pixmap)
 
 
 class ZoomComboBox(QComboBox):
@@ -20,8 +43,11 @@ class ZoomComboBox(QComboBox):
         super().__init__(parent)
         self.setEditable(True)
         self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.setMinimumWidth(88)
+        self.setMinimumWidth(72)
+        self.setMaximumHeight(28)
         self.setToolTip("缩放比例")
+        self._arrow_icon = _down_arrow_icon(QColor(DARK_TEXT_MUTED))
+        self.apply_theme_styles()
         for percent in ZOOM_PRESETS:
             self.addItem(f"{percent}%")
         self.setCurrentText("50%")
@@ -55,3 +81,28 @@ class ZoomComboBox(QComboBox):
         self.blockSignals(False)
         if emit:
             self.zoom_changed.emit(clamped)
+
+    def apply_theme_styles(self) -> None:
+        arrow_color = QColor(DARK_TEXT_MUTED if is_dark_mode() else "#6B7280")
+        self._arrow_icon = _down_arrow_icon(arrow_color)
+        self.setStyleSheet(zoom_combo_stylesheet())
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setStyleSheet("background: transparent; border: none; padding: 0px; margin: 0px;")
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        arrow_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxArrow,
+            self,
+        )
+        if not arrow_rect.isValid():
+            arrow_rect = self.rect().adjusted(self.width() - 18, 0, 0, 0)
+        painter = QPainter(self)
+        self._arrow_icon.paint(painter, arrow_rect, Qt.AlignmentFlag.AlignCenter)
+        painter.end()

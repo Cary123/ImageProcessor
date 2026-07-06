@@ -64,6 +64,23 @@ QLineEdit, QSpinBox, QComboBox, QTextEdit {
     border-radius: 4px;
     padding: 4px;
 }
+QComboBox {
+    padding-right: 20px;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 18px;
+    border: none;
+    border-left: 1px solid #D1D5DB;
+    background-color: #F3F4F6;
+}
+QComboBox QLineEdit {
+    background: transparent;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+}
 QListWidget {
     background-color: #FFFFFF;
     color: #111827;
@@ -103,8 +120,19 @@ QTabBar::tab:selected {
     background-color: #F9FAFB;
     color: #111827;
 }
-QSplitter::handle {
+QSplitter::handle:horizontal {
+    width: 3px;
     background-color: #D1D5DB;
+}
+QSplitter::handle:horizontal:hover {
+    background-color: #9CA3AF;
+}
+QSplitter::handle:vertical {
+    height: 3px;
+    background-color: #D1D5DB;
+}
+QSplitter::handle:vertical:hover {
+    background-color: #9CA3AF;
 }
 QScrollBar:vertical {
     background: #F3F4F6;
@@ -175,9 +203,23 @@ QLineEdit, QSpinBox, QComboBox, QTextEdit {{
     padding: 4px;
     selection-background-color: {DARK_ACCENT};
 }}
+QComboBox {{
+    padding-right: 20px;
+}}
 QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 18px;
     border: none;
+    border-left: 1px solid {DARK_BORDER};
     background: {DARK_BG_ELEVATED};
+}}
+QComboBox QLineEdit {{
+    background: transparent;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+    color: {DARK_TEXT};
 }}
 QComboBox QAbstractItemView {{
     background-color: {DARK_BG_ELEVATED};
@@ -247,8 +289,19 @@ QTabBar::tab:selected {{
 QTabBar::tab:hover {{
     background-color: {DARK_HOVER};
 }}
-QSplitter::handle {{
+QSplitter::handle:horizontal {{
+    width: 3px;
     background-color: {DARK_BORDER_SUBTLE};
+}}
+QSplitter::handle:horizontal:hover {{
+    background-color: {DARK_BORDER};
+}}
+QSplitter::handle:vertical {{
+    height: 3px;
+    background-color: {DARK_BORDER_SUBTLE};
+}}
+QSplitter::handle:vertical:hover {{
+    background-color: {DARK_BORDER};
 }}
 QScrollBar:vertical {{
     background: {DARK_BG_SECONDARY};
@@ -350,7 +403,7 @@ def image_gallery_stylesheet() -> str:
             QListWidget {{
                 background: transparent;
                 border: none;
-                padding: 10px;
+                padding: 4px;
             }}
             QListWidget::item {{
                 margin: 0px;
@@ -369,7 +422,7 @@ def image_gallery_stylesheet() -> str:
             background: transparent;
             border: 1px solid #D1D5DB;
             border-radius: 6px;
-            padding: 10px;
+            padding: 4px;
         }
         QListWidget::item {
             margin: 0px;
@@ -393,10 +446,10 @@ def gallery_placeholder_stylesheet() -> str:
                 border: 2px dashed {DARK_BORDER};
                 border-radius: 8px;
                 color: {DARK_TEXT_MUTED};
-                font-size: 14px;
+                font-size: 12px;
                 font-weight: bold;
-                padding: 12px;
-                margin: 8px;
+                padding: 6px;
+                margin: 4px;
                 background: transparent;
             }}
         """
@@ -405,11 +458,133 @@ def gallery_placeholder_stylesheet() -> str:
             border: 2px dashed #9CA3AF;
             border-radius: 8px;
             color: #4B5563;
-            font-size: 14px;
+            font-size: 12px;
             font-weight: bold;
-            padding: 12px;
-            margin: 8px;
+            padding: 6px;
+            margin: 4px;
             background: transparent;
+        }
+    """
+
+
+def zoom_combo_stylesheet() -> str:
+    """Stylesheet for the editable zoom combo box."""
+    if _dark_mode:
+        return f"""
+            QComboBox {{
+                background-color: {DARK_BG_SECONDARY};
+                color: {DARK_TEXT};
+                border: 1px solid {DARK_BORDER};
+                border-radius: 4px;
+                padding: 2px 22px 2px 6px;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 18px;
+                border: none;
+                border-left: 1px solid {DARK_BORDER};
+                background-color: {DARK_BG_ELEVATED};
+                border-top-right-radius: 3px;
+                border-bottom-right-radius: 3px;
+            }}
+            QComboBox::down-arrow {{
+                width: 0px;
+                height: 0px;
+                border: none;
+                image: none;
+            }}
+            QComboBox QLineEdit {{
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+                color: {DARK_TEXT};
+            }}
+        """
+    return """
+        QComboBox {
+            background-color: #FFFFFF;
+            color: #111827;
+            border: 1px solid #D1D5DB;
+            border-radius: 4px;
+            padding: 2px 22px 2px 6px;
+        }
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 18px;
+            border: none;
+            border-left: 1px solid #D1D5DB;
+            background-color: #F3F4F6;
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }
+        QComboBox::down-arrow {
+            width: 0px;
+            height: 0px;
+            border: none;
+            image: none;
+        }
+        QComboBox QLineEdit {
+            background: transparent;
+            border: none;
+            padding: 0px;
+            margin: 0px;
+            color: #111827;
+        }
+    """
+
+
+def side_panel_tab_stylesheet() -> str:
+    """Compact tab styles for the right-side tool/layers panel."""
+    if _dark_mode:
+        return f"""
+            QTabWidget::pane {{
+                border: none;
+                border-top: 1px solid {DARK_BORDER_SUBTLE};
+                background-color: {DARK_BG_SECONDARY};
+            }}
+            QTabBar::tab {{
+                background-color: {DARK_BG};
+                color: {DARK_TEXT_MUTED};
+                padding: 6px 14px;
+                border: none;
+                border-bottom: 2px solid transparent;
+                margin-right: 0px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {DARK_BG_SECONDARY};
+                color: {DARK_TEXT};
+                border-bottom: 2px solid {DARK_ACCENT};
+            }}
+            QTabBar::tab:hover {{
+                color: {DARK_TEXT};
+                background-color: {DARK_BG_ELEVATED};
+            }}
+        """
+    return """
+        QTabWidget::pane {
+            border: none;
+            border-top: 1px solid #E5E7EB;
+            background-color: #FFFFFF;
+        }
+        QTabBar::tab {
+            background-color: #F3F4F6;
+            color: #6B7280;
+            padding: 6px 14px;
+            border: none;
+            border-bottom: 2px solid transparent;
+            margin-right: 0px;
+        }
+        QTabBar::tab:selected {
+            background-color: #FFFFFF;
+            color: #111827;
+            border-bottom: 2px solid #3B82F6;
+        }
+        QTabBar::tab:hover {
+            color: #111827;
+            background-color: #E5E7EB;
         }
     """
 

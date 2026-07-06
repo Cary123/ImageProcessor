@@ -13,6 +13,9 @@ from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QWidget
 
 from image_processor.utils.themes import gallery_placeholder_stylesheet, image_gallery_stylesheet
 
+THUMB_SIZE = 72
+THUMB_GAP = 2
+
 
 class ImageGallery(QListWidget):
     """Horizontal thumbnail gallery with uniform centered 100x100 images."""
@@ -24,14 +27,14 @@ class ImageGallery(QListWidget):
         self.setViewMode(QListWidget.IconMode)
         self.setFlow(QListWidget.LeftToRight)
         self.setWrapping(False)
-        self.setIconSize(QSize(100, 100))
-        self.setGridSize(QSize(100, 100))
-        self.setSpacing(6)
+        self.setIconSize(QSize(THUMB_SIZE, THUMB_SIZE))
+        self.setGridSize(QSize(THUMB_SIZE, THUMB_SIZE))
+        self.setSpacing(THUMB_GAP)
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setMinimumHeight(120)
-        self.setMaximumHeight(120)
+        self.setMinimumHeight(THUMB_SIZE + 8)
+        self.setMaximumHeight(THUMB_SIZE + 8)
         self._placeholder_label: QLabel | None = None
         self.apply_theme_styles()
         self.itemClicked.connect(self._on_item_clicked)
@@ -61,10 +64,11 @@ class ImageGallery(QListWidget):
         self._placeholder_item.setSizeHint(size)
 
     def _make_thumbnail(self, image: Image.Image) -> QPixmap:
-        image.thumbnail((100, 100), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
-        x = (100 - image.width) // 2
-        y = (100 - image.height) // 2
+        size = THUMB_SIZE
+        image.thumbnail((size, size), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        x = (size - image.width) // 2
+        y = (size - image.height) // 2
         canvas.paste(image, (x, y), image)
         data = np.array(canvas.convert("RGBA"))
         height, width, _ = data.shape
