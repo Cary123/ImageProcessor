@@ -159,10 +159,8 @@ class BrushBaseTool(Tool):
         self._cursor_item.setVisible(True)
 
     def _image_brush_size(self) -> int:
-        scale = self.canvas.transform().m11()
-        if scale <= 0:
-            scale = 1.0
-        return max(1, int(self.canvas._brush_size / scale))
+        """Brush radius in image pixels, matching the on-canvas cursor circle."""
+        return max(1, round(self.canvas._brush_size / 2))
 
     def _create_brush_stamp(self, size: int) -> Image.Image:
         stamp = Image.new("L", (size * 2 + 1, size * 2 + 1), 0)
@@ -708,7 +706,7 @@ class CloneStampTool(Tool):
         layer = self.canvas.active_layer()
         if layer is None:
             return
-        size = max(1, int(self.canvas._brush_size / 2 / max(self.canvas.transform().m11(), 0.001)))
+        size = max(1, round(self.canvas._brush_size / 2))
         sx, sy = self._source_point
         tx, ty = target
         dx = tx - sx

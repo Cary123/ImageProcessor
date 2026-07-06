@@ -164,6 +164,12 @@ QProgressBar::chunk {
     background-color: #3B82F6;
     border-radius: 4px;
 }
+QToolTip {
+    color: #111827;
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    padding: 4px 8px;
+}
 """
 
 DARK_STYLE = f"""
@@ -376,6 +382,12 @@ QGroupBox::title {{
     left: 8px;
     padding: 0 4px;
 }}
+QToolTip {{
+    color: {DARK_TEXT};
+    background-color: {DARK_BG_ELEVATED};
+    border: 1px solid {DARK_BORDER};
+    padding: 4px 8px;
+}}
 """
 
 
@@ -404,13 +416,14 @@ def image_gallery_stylesheet() -> str:
                 background: transparent;
                 border: none;
                 padding: 4px;
+                outline: none;
             }}
             QListWidget::item {{
-                margin: 0px;
+                margin: 4px;
                 padding: 0px;
-                border: 1px solid {DARK_BORDER};
+                border: 2px solid {DARK_BORDER};
                 border-radius: 4px;
-                background: transparent;
+                background: {DARK_BG_SECONDARY};
             }}
             QListWidget::item:selected {{
                 border: 2px solid {DARK_ACCENT};
@@ -423,13 +436,14 @@ def image_gallery_stylesheet() -> str:
             border: 1px solid #D1D5DB;
             border-radius: 6px;
             padding: 4px;
+            outline: none;
         }
         QListWidget::item {
-            margin: 0px;
+            margin: 4px;
             padding: 0px;
-            border: 1px solid #D1D5DB;
+            border: 2px solid #D1D5DB;
             border-radius: 4px;
-            background: transparent;
+            background: #F3F4F6;
         }
         QListWidget::item:selected {
             border: 2px solid #3B82F6;

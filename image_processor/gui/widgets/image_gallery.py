@@ -13,12 +13,15 @@ from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QWidget
 
 from image_processor.utils.themes import gallery_placeholder_stylesheet, image_gallery_stylesheet
 
-THUMB_SIZE = 72
-THUMB_GAP = 2
+THUMB_SIZE = 64
+ITEM_BORDER = 2
+ITEM_MARGIN = 4
+CELL_SIZE = THUMB_SIZE + 2 * ITEM_BORDER + 2 * ITEM_MARGIN
+LIST_PADDING = 8
 
 
 class ImageGallery(QListWidget):
-    """Horizontal thumbnail gallery with uniform centered 100x100 images."""
+    """Horizontal thumbnail gallery with uniform centered square thumbnails."""
 
     item_clicked = Signal(int)
 
@@ -27,14 +30,16 @@ class ImageGallery(QListWidget):
         self.setViewMode(QListWidget.IconMode)
         self.setFlow(QListWidget.LeftToRight)
         self.setWrapping(False)
+        self.setUniformItemSizes(True)
         self.setIconSize(QSize(THUMB_SIZE, THUMB_SIZE))
-        self.setGridSize(QSize(THUMB_SIZE, THUMB_SIZE))
-        self.setSpacing(THUMB_GAP)
+        self.setGridSize(QSize(CELL_SIZE, CELL_SIZE))
+        self.setSpacing(0)
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setMinimumHeight(THUMB_SIZE + 8)
-        self.setMaximumHeight(THUMB_SIZE + 8)
+        gallery_height = CELL_SIZE + LIST_PADDING
+        self.setMinimumHeight(gallery_height)
+        self.setMaximumHeight(gallery_height)
         self._placeholder_label: QLabel | None = None
         self.apply_theme_styles()
         self.itemClicked.connect(self._on_item_clicked)
