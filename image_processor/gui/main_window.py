@@ -6,14 +6,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,19 +35,23 @@ from image_processor.gui.panels.brush_panel import BrushPanel
 from image_processor.gui.panels.crop_panel import CropPanel
 from image_processor.gui.panels.grid_panel import GridPanel
 from image_processor.gui.panels.inpaint_panel import InpaintPanel
+from image_processor.gui.panels.layers_panel import LayersPanel
 from image_processor.gui.panels.matting_panel import MattingPanel
 from image_processor.gui.panels.resize_panel import ResizePanel
-from image_processor.gui.widgets.sprite_editor import SpriteEditor, SpriteEditorWindow
 from image_processor.gui.toolbar import ToolBar
 from image_processor.gui.widgets.batch_dialog import BatchDialog
+from image_processor.gui.widgets.color_bar import ColorBar
 from image_processor.gui.widgets.compare_dialog import CompareDialog
+from image_processor.gui.widgets.image_gallery import ImageGallery
 from image_processor.gui.widgets.matting_worker import MattingWorker
 from image_processor.gui.widgets.slider_compare import SliderCompareDialog
+from image_processor.gui.widgets.sprite_editor import SpriteEditor
 from image_processor.gui.widgets.toast import Toast
 from image_processor.models.image_item import ImageItem
 from image_processor.utils.helpers import collect_images, is_matting_model_available
 from image_processor.utils.recent_files import RecentFilesManager
-from image_processor.utils.themes import apply_theme
+from image_processor.utils.themes import apply_theme, gallery_frame_stylesheet, gallery_hint_stylesheet
+from image_processor.gui.widgets.icons import get_icon
 
 
 class MainWindow(QMainWindow):
@@ -62,100 +68,28 @@ class MainWindow(QMainWindow):
         self.current_index = -1
         self.recent_files = RecentFilesManager()
         self._matting_item: ImageItem | None = None
-        self._sprite_window: SpriteEditorWindow | None = None
 
         self._build_ui()
         self._connect_signals()
+        self._apply_editor_theme_styles()
         self._update_status()
         self.canvas.setFocus()
 
     def _build_ui(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        self.tab_widget = QTabWidget()
+        self.setCentralWidget(self.tab_widget)
 
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(0)
+        self.image_editor = self._build_image_editor()
+        self.sprite_editor = SpriteEditor()
 
-        self.toolbar = ToolBar()
-        content_layout.addWidget(self.toolbar)
-
-        self.splitter = QSplitter(Qt.Horizontal)
-        content_layout.addWidget(self.splitter, 1)
-
-        self.canvas = ImageCanvas()
-        self.splitter.addWidget(self.canvas)
-
-        self.panel_stack = QStackedWidget()
-        self.panel_stack.setMinimumWidth(260)
-        self.panel_stack.setMaximumWidth(360)
-
-        self.matting_panel = MattingPanel()
-        self.resize_panel = ResizePanel()
-        self.crop_panel = CropPanel()
-        self.inpaint_panel = InpaintPanel()
-        self.brush_panel = BrushPanel()
-        self.grid_panel = GridPanel()
-        self.sprite_panel = SpriteEditor()
-        self.adjust_panel = AdjustPanel()
-
-        self.panel_stack.addWidget(self.matting_panel)
-        self.panel_stack.addWidget(self.resize_panel)
-        self.panel_stack.addWidget(self.crop_panel)
-        self.panel_stack.addWidget(self.inpaint_panel)
-        self.panel_stack.addWidget(self.brush_panel)
-        self.panel_stack.addWidget(self.grid_panel)
-        self.panel_stack.addWidget(self.sprite_panel)
-        self.panel_stack.addWidget(self.adjust_panel)
-
-        self.splitter.addWidget(self.panel_stack)
-        self.splitter.setSizes([700, 260])
-
-        main_layout.addLayout(content_layout, 1)
-
-        bottom_panel = QWidget()
-        bottom_panel.setMaximumHeight(120)
-        bottom_layout = QHBoxLayout(bottom_panel)
-        bottom_layout.setContentsMargins(8, 4, 8, 4)
-        bottom_layout.setSpacing(8)
-
-        self.prev_button = QPushButton("< 上一张")
-        self.prev_button.setEnabled(False)
-        self.prev_button.clicked.connect(self._previous_image)
-        bottom_layout.addWidget(self.prev_button)
-
-        self.next_button = QPushButton("下一张 >")
-        self.next_button.setEnabled(False)
-        self.next_button.clicked.connect(self._next_image)
-        bottom_layout.addWidget(self.next_button)
-
-        self.thumbnail_list = QListWidget()
-        self.thumbnail_list.setFlow(QListWidget.LeftToRight)
-        self.thumbnail_list.setWrapping(False)
-        self.thumbnail_list.itemClicked.connect(self._on_thumbnail_clicked)
-        bottom_layout.addWidget(self.thumbnail_list, 1)
-
-        self.zoom_reset_button = QPushButton("适应窗口")
-        self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
-        bottom_layout.addWidget(self.zoom_reset_button)
-
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setMinimumWidth(60)
-        bottom_layout.addWidget(self.zoom_label)
-
-        self.coord_label = QLabel("坐标: --, --")
-        self.coord_label.setMinimumWidth(120)
-        bottom_layout.addWidget(self.coord_label)
-
-        main_layout.addWidget(bottom_panel)
+        self.tab_widget.addTab(self.image_editor, "图片编辑")
+        self.tab_widget.addTab(self.sprite_editor, "精灵图")
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(200)
         self.progress_bar.setVisible(False)
 
-        self.status_zoom_label = QLabel("100%")
+        self.status_zoom_label = QLabel("50%")
         self.status_zoom_label.setMinimumWidth(60)
         self.status_coord_label = QLabel("--, -- px")
         self.status_coord_label.setMinimumWidth(90)
@@ -167,6 +101,125 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
 
         self._build_menu()
+
+    def _build_image_editor(self) -> QWidget:
+        editor = QWidget()
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(0)
+
+        self.color_bar = ColorBar()
+        editor_layout.addWidget(self.color_bar)
+
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(0)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.toolbar = ToolBar()
+        content_layout.addWidget(self.toolbar)
+
+        self.content_splitter = QSplitter(Qt.Horizontal)
+        content_layout.addWidget(self.content_splitter, 1)
+
+        center_widget = QWidget()
+        center_layout = QVBoxLayout(center_widget)
+        center_layout.setSpacing(0)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.canvas = ImageCanvas()
+        center_layout.addWidget(self.canvas, 1)
+
+        gallery_layout = QHBoxLayout()
+        gallery_layout.setSpacing(6)
+        gallery_layout.setContentsMargins(6, 4, 6, 4)
+
+        self.prev_button = QPushButton()
+        self.prev_button.setFixedSize(36, 64)
+        self.prev_button.setIcon(get_icon("prev", size=20))
+        self.prev_button.setToolTip("上一张")
+        self.prev_button.setEnabled(False)
+        self.prev_button.clicked.connect(self._previous_image)
+        gallery_layout.addWidget(self.prev_button)
+
+        self.gallery_frame = QFrame()
+        self.gallery_frame.setFrameShape(QFrame.StyledPanel)
+        gallery_frame_layout = QVBoxLayout(self.gallery_frame)
+        gallery_frame_layout.setSpacing(4)
+        gallery_frame_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.gallery = ImageGallery()
+        gallery_frame_layout.addWidget(self.gallery, 1)
+
+        self.gallery_hint = QLabel("拖拽图片到这里显示")
+        self.gallery_hint.setAlignment(Qt.AlignCenter)
+        self.gallery_hint.setWordWrap(True)
+        gallery_frame_layout.addWidget(self.gallery_hint)
+
+        gallery_layout.addWidget(self.gallery_frame, 1)
+
+        self.next_button = QPushButton()
+        self.next_button.setFixedSize(36, 64)
+        self.next_button.setIcon(get_icon("next", size=20))
+        self.next_button.setToolTip("下一张")
+        self.next_button.setEnabled(False)
+        self.next_button.clicked.connect(self._next_image)
+        gallery_layout.addWidget(self.next_button)
+
+        center_layout.addLayout(gallery_layout)
+
+        info_layout = QHBoxLayout()
+        info_layout.setContentsMargins(8, 4, 8, 4)
+        info_layout.setSpacing(12)
+        self.crop_size_label = QLabel("裁剪尺寸: --")
+        self.crop_size_label.setMinimumWidth(120)
+        info_layout.addWidget(self.crop_size_label)
+        info_layout.addStretch()
+        self.zoom_label = QLabel("50%")
+        self.zoom_label.setMinimumWidth(60)
+        self.coord_label = QLabel("坐标: --, --")
+        self.coord_label.setMinimumWidth(120)
+        info_layout.addWidget(self.zoom_label)
+        info_layout.addWidget(self.coord_label)
+        center_layout.addLayout(info_layout)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setSpacing(0)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.panel_stack = QStackedWidget()
+        self.panel_stack.setMinimumWidth(260)
+        self.panel_stack.setMaximumWidth(360)
+
+        self.matting_panel = MattingPanel()
+        self.resize_panel = ResizePanel()
+        self.crop_panel = CropPanel()
+        self.inpaint_panel = InpaintPanel()
+        self.brush_panel = BrushPanel()
+        self.grid_panel = GridPanel()
+        self.adjust_panel = AdjustPanel()
+
+        self.panel_stack.addWidget(self.matting_panel)
+        self.panel_stack.addWidget(self.resize_panel)
+        self.panel_stack.addWidget(self.crop_panel)
+        self.panel_stack.addWidget(self.inpaint_panel)
+        self.panel_stack.addWidget(self.brush_panel)
+        self.panel_stack.addWidget(self.grid_panel)
+        self.panel_stack.addWidget(self.adjust_panel)
+
+        self.layers_panel = LayersPanel()
+        self.layers_panel.setMinimumWidth(260)
+        self.layers_panel.setMaximumWidth(360)
+
+        right_layout.addWidget(self.panel_stack, 2)
+        right_layout.addWidget(self.layers_panel, 1)
+
+        self.content_splitter.addWidget(center_widget)
+        self.content_splitter.addWidget(right_panel)
+        self.content_splitter.setSizes([700, 260])
+
+        editor_layout.addLayout(content_layout, 1)
+        return editor
 
     def _build_menu(self) -> None:
         menu = self.menuBar()
@@ -265,12 +318,31 @@ class MainWindow(QMainWindow):
 
         self.dark_theme_action = QAction("深色模式", self)
         self.dark_theme_action.setCheckable(True)
-        self.dark_theme_action.setChecked(False)
+        self.dark_theme_action.setChecked(True)
         self.dark_theme_action.triggered.connect(self._toggle_theme)
         view_menu.addAction(self.dark_theme_action)
 
     def _connect_signals(self) -> None:
         self.toolbar.tool_selected.connect(self._on_tool_selected)
+        self.color_bar.tool_selected.connect(self._on_tool_selected)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        self.canvas.color_picked.connect(self.color_bar.set_active_color)
+
+        self.color_bar.foreground_changed.connect(self.canvas.set_foreground_color)
+        self.color_bar.background_changed.connect(self.canvas.set_background_color)
+        self.color_bar.zoom_changed.connect(self._on_color_bar_zoom_changed)
+        self.canvas.zoom_changed.connect(self.color_bar.set_zoom_scale)
+
+        self.layers_panel.layer_selected.connect(self._on_layer_selected)
+        self.layers_panel.layer_visibility_changed.connect(self._on_layer_visibility_changed)
+        self.layers_panel.layer_deleted.connect(self._on_layer_deleted)
+        self.layers_panel.layer_renamed.connect(self._on_layer_renamed)
+        self.layers_panel.new_layer_requested.connect(self._on_new_layer)
+        self.layers_panel.opacity_changed.connect(self._on_layer_opacity_changed)
+        self.layers_panel.layers_reordered.connect(self._on_layers_reordered)
+        self.canvas.layers_changed.connect(self._on_canvas_layers_changed)
+
         self.matting_panel.request_matting.connect(self._run_matting)
         self.resize_panel.request_resize.connect(self._run_resize)
         self.crop_panel.request_crop.connect(self._run_crop)
@@ -283,6 +355,7 @@ class MainWindow(QMainWindow):
         self.brush_panel.apply_brush.connect(self.canvas.apply_brush)
         self.brush_panel.cancel_brush.connect(self.canvas.cancel_brush)
         self.canvas.brush_applied.connect(self._on_brush_applied)
+        self.canvas.image_changed.connect(self._on_canvas_image_changed)
         self.adjust_panel.adjustment_preview.connect(self._preview_adjust)
         self.adjust_panel.adjustment_applied.connect(self._apply_adjust)
         self.grid_panel.grid_changed.connect(self.canvas.set_grid_options)
@@ -290,12 +363,63 @@ class MainWindow(QMainWindow):
         self.canvas.cursor_moved.connect(self._on_cursor_moved)
         self.canvas.crop_rect_changed.connect(self._on_crop_rect_changed)
         self.crop_panel.crop_values_changed.connect(self._on_crop_values_changed)
+        self.gallery.item_clicked.connect(self._on_thumbnail_clicked)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == 1:
+            self.sprite_editor.set_images([item.source_path for item in self.images])
+
+    def _panel_row_to_canvas(self, row: int) -> int:
+        layer_count = len(self.canvas.layers())
+        return layer_count - 1 - row
+
+    def _on_layer_selected(self, row: int) -> None:
+        self.canvas.set_active_layer(self._panel_row_to_canvas(row))
+
+    def _on_layer_visibility_changed(self, row: int) -> None:
+        self.canvas.toggle_layer_visibility(self._panel_row_to_canvas(row))
+
+    def _on_layer_deleted(self, row: int) -> None:
+        self.canvas.delete_layer(self._panel_row_to_canvas(row))
+
+    def _on_layer_renamed(self, row: int, name: str) -> None:
+        self.canvas.rename_layer(self._panel_row_to_canvas(row), name)
+
+    def _on_new_layer(self) -> None:
+        self.canvas.add_new_layer()
+
+    def _on_layer_opacity_changed(self, opacity: int) -> None:
+        self.canvas.set_all_visible_layers_opacity(opacity)
+
+    def _on_layers_reordered(self, new_panel_order: list[int]) -> None:
+        self.canvas.reorder_image_layers(list(reversed(new_panel_order)))
+
+    def _on_canvas_layers_changed(self) -> None:
+        layers = self.canvas.layers()
+        names = [layer.name for layer in layers]
+        visibilities = [layer.visible for layer in layers]
+        active = self.canvas.active_layer()
+        canvas_index = layers.index(active) if active is not None and active in layers else 0
+        selected_row = len(layers) - 1 - canvas_index
+        self.layers_panel.set_layers(names, visibilities, selected_row)
+
+    def _on_canvas_image_changed(self, image: Image.Image) -> None:
+        if not self.images or self.current_index < 0:
+            return
+        item = self.images[self.current_index]
+        if item.image.tobytes() != image.tobytes():
+            item.replace(image, description="编辑")
 
     def _on_brush_mode_changed(self, mode: str) -> None:
         self.canvas.set_brush_mode(mode)
         self.toolbar.set_tool_checked(mode)
 
     def _on_tool_selected(self, tool: str) -> None:
+        if tool == "sprite":
+            self.tab_widget.setCurrentIndex(1)
+            return
+        self.tab_widget.setCurrentIndex(0)
+
         mapping = {
             "matting": 0,
             "resize": 1,
@@ -307,9 +431,10 @@ class MainWindow(QMainWindow):
             "free_select": 4,
             "clone_stamp": 4,
             "move": 4,
+            "eyedropper": 4,
+            "paint_bucket": 4,
             "grid": 5,
-            "sprite": 6,
-            "adjust": 7,
+            "adjust": 6,
         }
         self.panel_stack.setCurrentIndex(mapping.get(tool, 0))
         if tool in ("brush", "eraser"):
@@ -317,13 +442,13 @@ class MainWindow(QMainWindow):
             self.canvas.set_brush_mode("brush" if tool == "brush" else "eraser")
         else:
             self.canvas.set_brush_mode(None)
-        if tool in ("rect_select", "free_select", "crop", "clone_stamp", "move"):
+        if tool in ("rect_select", "free_select", "crop", "clone_stamp", "move", "eyedropper", "paint_bucket"):
             self.canvas.set_tool(tool)
         elif tool == "navigator":
             self.canvas.set_tool("navigator")
-        if tool == "sprite":
-            self._open_sprite_editor()
-            return
+
+        self.toolbar.set_tool_checked(tool)
+        self.color_bar.set_tool_checked(tool)
         if tool == "grid" and 0 <= self.current_index < len(self.images):
             self.canvas.set_grid_options(self.grid_panel.current_options())
         if tool == "crop" and 0 <= self.current_index < len(self.images):
@@ -341,22 +466,6 @@ class MainWindow(QMainWindow):
             item = self.images[self.current_index]
             original = item.history._stack[0].image if item.history._stack else item.image
             self.canvas.start_brush_session(item.image, original)
-
-    def _open_sprite_editor(self) -> None:
-        if self._sprite_window is None:
-            self._sprite_window = SpriteEditorWindow(self)
-            self._sprite_window.closed.connect(self._on_sprite_editor_closed)
-        self._sprite_window.set_images([item.source_path for item in self.images])
-        self._sprite_window.show()
-        self._sprite_window.raise_()
-        self._sprite_window.activateWindow()
-        self.hide()
-
-    def _on_sprite_editor_closed(self) -> None:
-        self._sprite_window = None
-        self.show()
-        self.raise_()
-        self.activateWindow()
 
     def _update_recent_menu(self) -> None:
         self.recent_menu.clear()
@@ -420,7 +529,6 @@ class MainWindow(QMainWindow):
             self._clear_images()
             for data in project.images:
                 self.images.append(data.to_item())
-                self.thumbnail_list.addItem(data.source_path.name)
             self.current_index = project.current_index
             if self.current_index < 0 or self.current_index >= len(self.images):
                 self.current_index = 0 if self.images else -1
@@ -435,16 +543,14 @@ class MainWindow(QMainWindow):
 
     def _clear_images(self) -> None:
         self.images.clear()
-        self.thumbnail_list.clear()
         self.current_index = -1
         self.canvas.clear()
+        self._update_gallery()
 
     def _load_image_items(self, paths: list[Path]) -> None:
         new_items: list[ImageItem] = []
         for path in paths:
             try:
-                from PIL import Image
-
                 image = Image.open(path).convert("RGBA")
                 new_items.append(ImageItem(source_path=path, image=image))
                 self.recent_files.add(path)
@@ -456,18 +562,17 @@ class MainWindow(QMainWindow):
             return
 
         self.images.extend(new_items)
-        for item in new_items:
-            self.thumbnail_list.addItem(item.name)
         self.current_index = len(self.images) - len(new_items)
         self._show_current_image()
         self._update_status()
         self._update_navigation_buttons()
         self._update_recent_menu()
+        self._update_gallery()
 
     def _show_current_image(self) -> None:
         if 0 <= self.current_index < len(self.images):
             self.canvas.set_image(self.images[self.current_index].image)
-            self.thumbnail_list.setCurrentRow(self.current_index)
+            self.gallery.setCurrentRow(self.current_index)
         else:
             self.canvas.clear()
 
@@ -483,12 +588,21 @@ class MainWindow(QMainWindow):
             self._show_current_image()
             self._update_status()
 
-    def _on_thumbnail_clicked(self) -> None:
-        row = self.thumbnail_list.currentRow()
-        if 0 <= row < len(self.images):
-            self.current_index = row
+    def _on_thumbnail_clicked(self, index: int) -> None:
+        if 0 <= index < len(self.images):
+            self.current_index = index
             self._show_current_image()
             self._update_status()
+
+    def _update_gallery(self) -> None:
+        images = [item.image for item in self.images]
+        names = [item.name for item in self.images]
+        self.gallery.set_images(images, names, self.current_index)
+        if self.images:
+            self.gallery_hint.setText(f"已加载 {len(self.images)} 张图片")
+        else:
+            self.gallery_hint.setText("拖拽图片到这里显示")
+        self._update_navigation_buttons()
 
     def _undo(self) -> None:
         if not self.images or self.current_index < 0:
@@ -538,6 +652,7 @@ class MainWindow(QMainWindow):
         self.crop_panel.top_spin.blockSignals(False)
         self.crop_panel.right_spin.blockSignals(False)
         self.crop_panel.bottom_spin.blockSignals(False)
+        self._update_crop_size_label()
 
     def _on_crop_values_changed(self, options: dict[str, Any]) -> None:
         layer = self.canvas.active_layer()
@@ -548,6 +663,15 @@ class MainWindow(QMainWindow):
             left, top, right, bottom = box
             self.canvas.crop_rect = (left + layer.x, top + layer.y, right + layer.x, bottom + layer.y)
             self.canvas.refresh_crop_tool()
+
+    def _update_crop_size_label(self) -> None:
+        if self.canvas.crop_rect is None:
+            self.crop_size_label.setText("裁剪尺寸: --")
+            return
+        left, top, right, bottom = self.canvas.crop_rect
+        width = int(right - left)
+        height = int(bottom - top)
+        self.crop_size_label.setText(f"裁剪尺寸: {width}x{height}")
 
     def _on_cursor_moved(self, x: int, y: int) -> None:
         if x < 0 or y < 0:
@@ -565,6 +689,9 @@ class MainWindow(QMainWindow):
         pasted = self.canvas.paste_selection()
         if pasted is not None:
             self._show_toast(f"已粘贴图层: {pasted.width}x{pasted.height}")
+            self._on_canvas_image_changed(self.canvas.export_image())
+            self.canvas.set_tool("move")
+            self.toolbar.set_tool_checked("move")
         else:
             self._show_toast("剪贴板为空")
 
@@ -572,6 +699,10 @@ class MainWindow(QMainWindow):
         total = len(self.images)
         self.prev_button.setEnabled(self.current_index > 0)
         self.next_button.setEnabled(self.current_index < total - 1)
+
+    def _on_color_bar_zoom_changed(self, scale: float) -> None:
+        self.canvas.set_zoom_scale(scale, emit=False)
+        self._on_zoom_changed(scale)
 
     def _on_zoom_changed(self, scale: float) -> None:
         self.zoom_label.setText(f"{int(scale * 100)}%")
@@ -614,11 +745,23 @@ class MainWindow(QMainWindow):
         dialog = SliderCompareDialog(before, after, self)
         dialog.exec()
 
+    def _apply_editor_theme_styles(self) -> None:
+        self.gallery_frame.setStyleSheet(gallery_frame_stylesheet())
+        self.gallery_hint.setStyleSheet(gallery_hint_stylesheet())
+        self.gallery.apply_theme_styles()
+        self.color_bar.refresh_theme()
+        self.toolbar.refresh_icons()
+        self.prev_button.setIcon(get_icon("prev", size=20))
+        self.next_button.setIcon(get_icon("next", size=20))
+        self.canvas.apply_theme_styles()
+        self._on_canvas_layers_changed()
+
     def _toggle_theme(self) -> None:
         app = QApplication.instance()
         if app is None:
             return
         apply_theme(app, self.dark_theme_action.isChecked())
+        self._apply_editor_theme_styles()
 
     def _open_images(self) -> None:
         dialog = QFileDialog(self, "打开图片")
@@ -730,44 +873,6 @@ class MainWindow(QMainWindow):
         except EngineError as exc:
             QMessageBox.critical(self, "缩放失败", str(exc))
 
-    def _run_sprite(self, options: dict[str, Any]) -> None:
-        from image_processor.core.image_engine import create_sprite_sheet, export_image
-
-        paths = [Path(p) for p in options.get("paths", [])]
-        if not paths:
-            QMessageBox.information(self, "提示", "请选择图片文件夹")
-            return
-
-        try:
-            sprite, frames = create_sprite_sheet(
-                paths,
-                cols=options.get("cols") or None,
-                spacing=options.get("spacing", 0),
-                padding=options.get("padding", 0),
-                sort_by="name",
-            )
-            output_path = Path(options["output_path"])
-            export_image(sprite, output_path, format="PNG")
-            if options.get("json_path"):
-                json_path = Path(options["json_path"])
-                json_path.parent.mkdir(parents=True, exist_ok=True)
-                import json
-
-                metadata = {
-                    "frames": frames,
-                    "meta": {
-                        "version": "1.0",
-                        "size": {"w": sprite.width, "h": sprite.height},
-                        "image": output_path.name,
-                    },
-                }
-                json_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-            self.canvas.set_image(sprite)
-            self._show_toast(f"精灵图已生成: {output_path}")
-            self.status_bar.showMessage(f"精灵图已生成: {output_path}", 5000)
-        except EngineError as exc:
-            QMessageBox.critical(self, "精灵图生成失败", str(exc))
-
     def _preview_adjust(self, options: dict[str, Any]) -> None:
         if not self.images or self.current_index < 0:
             return
@@ -874,7 +979,8 @@ class MainWindow(QMainWindow):
         if not self.images or self.current_index < 0:
             return
         item = self.images[self.current_index]
-        item.replace(result, description="画笔修复")
+        if item.image.tobytes() != result.tobytes():
+            item.replace(result, description="画笔修复")
         original = item.history._stack[0].image if item.history._stack else item.image
         self.canvas.start_brush_session(item.image, original)
         self._show_toast("画笔修复已应用")

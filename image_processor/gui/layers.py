@@ -77,6 +77,9 @@ class Layer:
             scene.removeItem(self.item)
             self.item = None
 
+    def contains(self, scene_x: float, scene_y: float) -> bool:
+        return self.x <= scene_x < self.x + self.width and self.y <= scene_y < self.y + self.height
+
 
 class LayerManager:
     """Manages the stack of layers for a canvas."""
@@ -88,6 +91,7 @@ class LayerManager:
         self._checkerboard_size = 16
         self._checkerboard_color1 = (255, 255, 255)
         self._checkerboard_color2 = (229, 231, 235)
+        self._selected_layer: Layer | None = None
 
     def add_layer(self, layer: Layer, *, index: int | None = None) -> None:
         if index is None:
@@ -101,6 +105,29 @@ class LayerManager:
         layer.remove_from_scene(self.scene)
         if layer in self.layers:
             self.layers.remove(layer)
+        if self._selected_layer is layer:
+            self._selected_layer = None
+
+    def image_layers(self) -> list[Layer]:
+        return [layer for layer in self.layers if not layer.metadata.get("is_checkerboard")]
+
+    def reorder_image_layers(self, new_order: list[int]) -> None:
+        """Reorder image layers according to the given index permutation."""
+        image_layers = self.image_layers()
+        if not image_layers or not new_order:
+            return
+        try:
+            reordered = [image_layers[i] for i in new_order]
+        except IndexError:
+            return
+        self.layers = [self._checkerboard_layer] + reordered if self._checkerboard_layer is not None else reordered
+        self._refresh_z_values()
+        for layer in self.layers:
+            layer.update_pixmap(self.scene)
+
+    def set_active_layer(self, layer: Layer | None) -> None:
+        if layer is None or layer in self.layers:
+            self._selected_layer = layer
 
     def set_checkerboard(
         self,
@@ -161,6 +188,7 @@ class LayerManager:
             layer.remove_from_scene(self.scene)
         self.layers.clear()
         self._checkerboard_layer = None
+        self._selected_layer = None
 
     def image_rect(self) -> tuple[int, int, int, int] | None:
         """Return bounding box of all non-background layers."""
@@ -178,8 +206,16 @@ class LayerManager:
         return left, top, right, bottom
 
     def active_image_layer(self) -> Layer | None:
+        if self._selected_layer is not None and self._selected_layer.visible:
+            return self._selected_layer
         for layer in reversed(self.layers):
             if not layer.metadata.get("is_checkerboard") and layer.visible:
+                return layer
+        return None
+
+    def layer_at(self, scene_x: float, scene_y: float) -> Layer | None:
+        for layer in reversed(self.image_layers()):
+            if layer.visible and layer.contains(scene_x, scene_y):
                 return layer
         return None
 

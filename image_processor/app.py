@@ -8,6 +8,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from image_processor.gui.main_window import MainWindow
+from image_processor.utils.themes import apply_theme
 
 
 def create_application(argv: list[str] | None = None) -> QApplication:
@@ -17,6 +18,7 @@ def create_application(argv: list[str] | None = None) -> QApplication:
     app.setApplicationName("ImageProcessor")
     app.setApplicationDisplayName("ImageProcessor")
     app.setOrganizationName("ImageProcessor")
+    apply_theme(app, dark=True)
     return app
 
 

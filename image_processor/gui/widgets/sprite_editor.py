@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import Qt, QMimeData, Signal
-from PySide6.QtGui import QCloseEvent, QDrag, QDragEnterEvent, QDropEvent, QImage, QPixmap
+from PySide6.QtGui import QCloseEvent, QDrag, QDragEnterEvent, QDropEvent, QImage, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from image_processor.gui.widgets.zoom_combo import ZoomComboBox
 
 
 class SourceListWidget(QListWidget):
@@ -54,6 +56,7 @@ class SpriteGridCanvas(QGraphicsView):
     """Fixed-size canvas with a grid of drop targets."""
 
     cell_filled = Signal(int, int)
+    zoom_changed = Signal(float)
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,8 +69,9 @@ class SpriteGridCanvas(QGraphicsView):
 
         self._canvas_width = 768
         self._canvas_height = 768
-        self._rows = 6
-        self._cols = 6
+        self._rows = 4
+        self._cols = 4
+        self._zoom_scale = 0.5
         self._images: list[Image.Image] = []
         self._cells: list[QGraphicsPixmapItem | None] = [None] * (self._rows * self._cols)
         self._grid_lines: list[QGraphicsLineItem] = []
@@ -76,6 +80,7 @@ class SpriteGridCanvas(QGraphicsView):
         self._guides_visible = True
 
         self._build_scene()
+        self._apply_zoom()
 
     def _build_scene(self) -> None:
         self.scene.clear()
@@ -133,6 +138,27 @@ class SpriteGridCanvas(QGraphicsView):
         self._rows = max(1, rows)
         self._cols = max(1, cols)
         self._build_scene()
+        self._apply_zoom()
+
+    def zoom_scale(self) -> float:
+        return self._zoom_scale
+
+    def set_zoom_scale(self, scale: float, *, emit: bool = True) -> None:
+        self._zoom_scale = max(0.1, min(5.0, scale))
+        self._apply_zoom()
+        if emit:
+            self.zoom_changed.emit(self._zoom_scale)
+
+    def _apply_zoom(self) -> None:
+        self.resetTransform()
+        self.scale(self._zoom_scale, self._zoom_scale)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if event.modifiers() & Qt.ControlModifier:
+            factor = 1.1 if event.angleDelta().y() > 0 else 0.9
+            self.set_zoom_scale(self._zoom_scale * factor)
+            return
+        super().wheelEvent(event)
 
     def set_guides_visible(self, visible: bool) -> None:
         self._guides_visible = visible
@@ -268,31 +294,39 @@ class SpriteEditor(QWidget):
 
         controls = QHBoxLayout()
 
-        form_layout = QFormLayout()
-        form_layout.setSpacing(4)
-
         self.width_spin = QSpinBox()
         self.width_spin.setRange(1, 4096)
         self.width_spin.setValue(768)
         self.width_spin.setSuffix(" px")
-        form_layout.addRow("画布宽:", self.width_spin)
 
         self.height_spin = QSpinBox()
         self.height_spin.setRange(1, 4096)
         self.height_spin.setValue(768)
         self.height_spin.setSuffix(" px")
-        form_layout.addRow("画布高:", self.height_spin)
 
         self.rows_spin = QSpinBox()
         self.rows_spin.setRange(1, 64)
-        self.rows_spin.setValue(6)
-        form_layout.addRow("行数:", self.rows_spin)
+        self.rows_spin.setValue(4)
 
         self.cols_spin = QSpinBox()
         self.cols_spin.setRange(1, 64)
-        self.cols_spin.setValue(6)
-        form_layout.addRow("列数:", self.cols_spin)
-        controls.addLayout(form_layout)
+        self.cols_spin.setValue(4)
+
+        size_form = QFormLayout()
+        size_form.setSpacing(4)
+        size_form.addRow("画布宽:", self.width_spin)
+        size_form.addRow("画布高:", self.height_spin)
+
+        grid_form = QFormLayout()
+        grid_form.setSpacing(4)
+        grid_form.addRow("行数:", self.rows_spin)
+        grid_form.addRow("列数:", self.cols_spin)
+
+        forms_layout = QHBoxLayout()
+        forms_layout.setSpacing(16)
+        forms_layout.addLayout(size_form)
+        forms_layout.addLayout(grid_form)
+        controls.addLayout(forms_layout)
 
         controls.addSpacing(16)
 
@@ -313,6 +347,12 @@ class SpriteEditor(QWidget):
         self.guides_button.setCheckable(True)
         self.guides_button.clicked.connect(self._toggle_guides)
         controls.addWidget(self.guides_button)
+
+        controls.addSpacing(8)
+        controls.addWidget(QLabel("缩放:"))
+        self.zoom_combo = ZoomComboBox()
+        self.zoom_combo.zoom_changed.connect(self._on_zoom_combo_changed)
+        controls.addWidget(self.zoom_combo)
 
         self.export_button = QPushButton("导出精灵图")
         self.export_button.setStyleSheet("background-color: #10B981; color: white; padding: 6px;")
@@ -337,6 +377,10 @@ class SpriteEditor(QWidget):
         self.height_spin.valueChanged.connect(self._on_grid_changed)
         self.rows_spin.valueChanged.connect(self._on_grid_changed)
         self.cols_spin.valueChanged.connect(self._on_grid_changed)
+        self.grid_canvas.zoom_changed.connect(self.zoom_combo.set_zoom_scale)
+
+    def _on_zoom_combo_changed(self, scale: float) -> None:
+        self.grid_canvas.set_zoom_scale(scale, emit=False)
 
     def _on_grid_changed(self) -> None:
         self.grid_canvas.set_grid(

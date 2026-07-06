@@ -159,8 +159,7 @@ _最后更新：2026-07-02_
 
 - GitHub 仓库：`https://github.com/Cary123/ImageProcessor`
 - Release 页面：`https://github.com/Cary123/ImageProcessor/releases/tag/v1.0.0`
-- 下载资产：`ImageProcessor-macOS.zip`（macOS arm64 应用包）
-- 本次开发为 v1.1 优化迭代，**不发布新的 release**
+- 不主动提交代码和发布版本
 
 ---
 

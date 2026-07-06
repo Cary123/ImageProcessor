@@ -8,8 +8,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from PIL import Image, ImageChops, ImageDraw
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QPainter, QPen, QPolygonF
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsRectItem
 
 if TYPE_CHECKING:
@@ -62,6 +62,9 @@ class Tool(ABC):
             return x, y
         return None
 
+    def _emit_image_changed(self) -> None:
+        self.canvas.image_changed.emit(self.canvas.export_image())
+
 
 class NavigatorTool(Tool):
     id = "navigator"
@@ -107,7 +110,7 @@ class BrushBaseTool(Tool):
 
     def __init__(self, canvas: "ImageCanvas") -> None:
         super().__init__(canvas)
-        self.cursor = Qt.CrossCursor
+        self.cursor = Qt.BlankCursor
         self._drawing = False
         self._last_point: tuple[int, int] | None = None
         self._cursor_item: QGraphicsEllipseItem | None = None
@@ -128,6 +131,7 @@ class BrushBaseTool(Tool):
             self._cursor_item.setPen(pen)
             self._cursor_item.setBrush(Qt.NoBrush)
             self._cursor_item.setZValue(1000)
+            self._cursor_item.setVisible(False)
             self.canvas.scene.addItem(self._cursor_item)
         self._update_cursor_position()
 
@@ -141,6 +145,9 @@ class BrushBaseTool(Tool):
             return
         if view_pos is None:
             view_pos = self.canvas.mapFromGlobal(self.canvas.cursor().pos())
+        if not self.canvas.viewport().rect().contains(view_pos):
+            self._cursor_item.setVisible(False)
+            return
         scene_pos = self.canvas.mapToScene(view_pos)
         radius = max(1, self.canvas._brush_size / 2)
         self._cursor_item.setRect(
@@ -202,12 +209,9 @@ class BrushBaseTool(Tool):
             alpha = ImageChops.multiply(alpha, ImageChops.invert(mask))
             result.putalpha(alpha)
         elif self.id == "brush":
-            original = self.canvas._brush_original
-            if original is not None:
-                if original.size != image.size:
-                    original = original.resize(image.size, Image.Resampling.LANCZOS)
-                restored = Image.composite(original, result, mask)
-                result = restored
+            color = self.canvas.foreground_color()
+            overlay = Image.new("RGBA", image.size, (color.red(), color.green(), color.blue(), 255))
+            result = Image.composite(overlay, result, mask)
         return result
 
     def mouse_press(self, event) -> bool:
@@ -233,6 +237,7 @@ class BrushBaseTool(Tool):
         if event.button() == Qt.LeftButton and self._drawing:
             self._drawing = False
             self._last_point = None
+            self._emit_image_changed()
             return True
         return False
 
@@ -280,7 +285,8 @@ class RectangleSelectTool(Tool):
         if selection is None:
             self._rect_item.setVisible(False)
             return
-        self._rect_item.setRect(selection)
+        left, top, right, bottom = selection
+        self._rect_item.setRect(QRectF(left, top, right - left, bottom - top))
         self._rect_item.setVisible(True)
 
     def mouse_press(self, event) -> bool:
@@ -596,7 +602,7 @@ class CropTool(Tool):
 
 class CloneStampTool(Tool):
     id = "clone_stamp"
-    cursor = Qt.CrossCursor
+    cursor = Qt.BlankCursor
 
     def __init__(self, canvas: "ImageCanvas") -> None:
         super().__init__(canvas)
@@ -623,6 +629,7 @@ class CloneStampTool(Tool):
             self._cursor_item.setPen(pen)
             self._cursor_item.setBrush(Qt.NoBrush)
             self._cursor_item.setZValue(1001)
+            self._cursor_item.setVisible(False)
             self.canvas.scene.addItem(self._cursor_item)
 
     def deactivate(self) -> None:
@@ -636,6 +643,9 @@ class CloneStampTool(Tool):
 
     def _update_cursor(self, view_pos: QPoint) -> None:
         if self._cursor_item is None:
+            return
+        if not self.canvas.viewport().rect().contains(view_pos):
+            self._cursor_item.setVisible(False)
             return
         scene_pos = self.canvas.mapToScene(view_pos)
         radius = max(1, self.canvas._brush_size / 2)
@@ -688,6 +698,7 @@ class CloneStampTool(Tool):
         if event.button() == Qt.LeftButton and self._drawing:
             self._drawing = False
             self._last_point = None
+            self._emit_image_changed()
             return True
         return False
 
@@ -726,26 +737,30 @@ class MoveTool(Tool):
         self._moving = False
         self._start_pos: QPoint | None = None
         self._start_layer_pos: tuple[int, int] | None = None
+        self._layer: Any = None
 
     def mouse_press(self, event) -> bool:
         if event.button() == Qt.LeftButton:
-            layer = self.canvas.active_layer()
+            scene_pos = self.canvas.mapToScene(event.pos())
+            layer = self.canvas._layers.layer_at(scene_pos.x(), scene_pos.y())
+            if layer is None:
+                layer = self.canvas.active_layer()
             if layer is not None:
                 self._moving = True
                 self._start_pos = event.pos()
                 self._start_layer_pos = (layer.x, layer.y)
+                self._layer = layer
+                self.canvas._layers.set_active_layer(layer)
                 return True
         return False
 
     def mouse_move(self, event) -> bool:
-        if self._moving and self._start_pos is not None and self._start_layer_pos is not None:
+        if self._moving and self._start_pos is not None and self._start_layer_pos is not None and self._layer is not None:
             delta = self.canvas.mapToScene(event.pos()) - self.canvas.mapToScene(self._start_pos)
-            layer = self.canvas.active_layer()
-            if layer is not None:
-                layer.move(
-                    int(self._start_layer_pos[0] + delta.x()),
-                    int(self._start_layer_pos[1] + delta.y()),
-                )
+            self._layer.move(
+                int(self._start_layer_pos[0] + delta.x()),
+                int(self._start_layer_pos[1] + delta.y()),
+            )
             return True
         return False
 
@@ -754,5 +769,51 @@ class MoveTool(Tool):
             self._moving = False
             self._start_pos = None
             self._start_layer_pos = None
+            self._layer = None
+            self._emit_image_changed()
+            return True
+        return False
+
+
+class EyedropperTool(Tool):
+    id = "eyedropper"
+    cursor = Qt.CrossCursor
+
+    def mouse_press(self, event) -> bool:
+        if event.button() == Qt.LeftButton:
+            pos = self._view_to_image_pos(event.pos())
+            if pos is not None:
+                layer = self.canvas.active_layer()
+                if layer is not None and layer.image is not None:
+                    x, y = pos
+                    pixel = layer.image.getpixel((x, y))
+                    if len(pixel) == 4:
+                        r, g, b, a = pixel
+                    else:
+                        r, g, b = pixel
+                        a = 255
+                    self.canvas.color_picked.emit(QColor(r, g, b, a))
+            return True
+        return False
+
+
+class PaintBucketTool(Tool):
+    id = "paint_bucket"
+    cursor = Qt.PointingHandCursor
+
+    def mouse_press(self, event) -> bool:
+        if event.button() == Qt.LeftButton:
+            pos = self._view_to_image_pos(event.pos())
+            if pos is not None:
+                layer = self.canvas.active_layer()
+                if layer is not None and layer.image is not None:
+                    x, y = pos
+                    color = self.canvas.foreground_color()
+                    fill = (color.red(), color.green(), color.blue(), 255)
+                    image = layer.image.copy()
+                    ImageDraw.floodfill(image, (x, y), fill, border=None)
+                    layer.image = image
+                    layer.update_pixmap(self.canvas.scene)
+                    self._emit_image_changed()
             return True
         return False
