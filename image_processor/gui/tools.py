@@ -7,7 +7,9 @@ import math
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PIL import Image, ImageChops, ImageDraw
+from image_processor.gui.brush_modes import create_brush_stamp
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsRectItem
@@ -114,6 +116,10 @@ class BrushBaseTool(Tool):
         self._drawing = False
         self._last_point: tuple[int, int] | None = None
         self._cursor_item: QGraphicsEllipseItem | None = None
+        self._stroke_base: Image.Image | None = None
+        self._stroke_mask: Image.Image | None = None
+        self._stamp_cache_key: tuple | None = None
+        self._stamp_cache_image: Image.Image | None = None
 
     def activate(self) -> None:
         super().activate()
@@ -122,6 +128,11 @@ class BrushBaseTool(Tool):
     def deactivate(self) -> None:
         super().deactivate()
         self._remove_cursor_item()
+        self._reset_stroke()
+
+    def _reset_stroke(self) -> None:
+        self._stroke_base = None
+        self._stroke_mask = None
 
     def _ensure_cursor_item(self) -> None:
         if self._cursor_item is None:
@@ -159,7 +170,6 @@ class BrushBaseTool(Tool):
         self._cursor_item.setVisible(True)
 
     def _image_brush_size(self) -> int:
-        """Brush radius in image pixels, matching the on-canvas cursor circle."""
         return max(1, round(self.canvas._brush_size / 2))
 
     def _create_brush_stamp(self, size: int) -> Image.Image:
@@ -176,29 +186,32 @@ class BrushBaseTool(Tool):
             )
         return stamp
 
-    def _draw_stroke(self, from_pos: tuple[int, int], to_pos: tuple[int, int]) -> None:
-        layer = self.canvas.active_layer()
-        if layer is None or layer.image is None:
-            return
-        size = self._image_brush_size()
+    def _get_stamp(self, size: int) -> Image.Image:
+        key = (size, self.canvas._brush_hardness, self.id)
+        if self._stamp_cache_key == key and self._stamp_cache_image is not None:
+            return self._stamp_cache_image
         stamp = self._create_brush_stamp(size)
+        self._stamp_cache_key = key
+        self._stamp_cache_image = stamp
+        return stamp
 
+    def _paint_mask_segment(
+        self,
+        mask: Image.Image,
+        stamp: Image.Image,
+        from_pos: tuple[int, int],
+        to_pos: tuple[int, int],
+        size: int,
+    ) -> None:
         x1, y1 = from_pos
         x2, y2 = to_pos
         distance = math.hypot(x2 - x1, y2 - y1)
-        steps = max(1, int(distance / (size / 2)) + 1)
-
-        mask = Image.new("L", layer.image.size, 0)
+        steps = max(1, int(distance / max(1, size / 2)) + 1)
         for step in range(steps + 1):
             t = step / steps
             x = int(x1 + (x2 - x1) * t)
             y = int(y1 + (y2 - y1) * t)
-            paste_box = (x - size, y - size)
-            mask.paste(stamp, paste_box, stamp)
-
-        result = self._apply_mask(layer.image, mask)
-        layer.image = result
-        layer.update_pixmap(self.canvas.scene)
+            mask.paste(stamp, (x - size, y - size), stamp)
 
     def _apply_mask(self, image: Image.Image, mask: Image.Image) -> Image.Image:
         result = image.copy()
@@ -212,15 +225,38 @@ class BrushBaseTool(Tool):
             result = Image.composite(overlay, result, mask)
         return result
 
+    def _begin_stroke(self, layer) -> None:
+        if self._stroke_base is None:
+            self._stroke_base = layer.image.copy()
+            self._stroke_mask = Image.new("L", layer.image.size, 0)
+
+    def _draw_stroke(self, from_pos: tuple[int, int], to_pos: tuple[int, int]) -> None:
+        layer = self.canvas.active_layer()
+        if layer is None or layer.image is None or layer.locked:
+            return
+        size = self._image_brush_size()
+        stamp = self._get_stamp(size)
+        self._begin_stroke(layer)
+        assert self._stroke_mask is not None and self._stroke_base is not None
+        self._paint_mask_segment(self._stroke_mask, stamp, from_pos, to_pos, size)
+        layer.image = self._apply_mask(self._stroke_base, self._stroke_mask)
+        layer.update_pixmap(self.canvas.scene)
+
     def mouse_press(self, event) -> bool:
-        if event.button() == Qt.LeftButton:
-            pos = self._view_to_image_pos(event.pos())
-            if pos is not None:
-                self._drawing = True
-                self._last_point = pos
-                self._draw_stroke(pos, pos)
-            return True
-        return False
+        if event.button() != Qt.LeftButton:
+            return False
+        layer = self.canvas.active_layer()
+        if not self.canvas.is_layer_editable(layer):
+            return False
+        pos = self._view_to_image_pos(event.pos())
+        if pos is None:
+            return False
+        if not self.canvas._brush_session_active:
+            self.canvas.start_brush_session()
+        self._drawing = True
+        self._last_point = pos
+        self._draw_stroke(pos, pos)
+        return True
 
     def mouse_move(self, event) -> bool:
         self._update_cursor_position(event.pos())
@@ -235,7 +271,7 @@ class BrushBaseTool(Tool):
         if event.button() == Qt.LeftButton and self._drawing:
             self._drawing = False
             self._last_point = None
-            self._emit_image_changed()
+            self._reset_stroke()
             return True
         return False
 
@@ -246,6 +282,26 @@ class EraserTool(BrushBaseTool):
 
 class BrushTool(BrushBaseTool):
     id = "brush"
+
+    def _get_stamp(self, size: int) -> Image.Image:
+        key = (
+            size,
+            self.canvas.brush_style(),
+            self.canvas.brush_hardness(),
+            self.canvas.brush_opacity(),
+            self.id,
+        )
+        if self._stamp_cache_key == key and self._stamp_cache_image is not None:
+            return self._stamp_cache_image
+        stamp = create_brush_stamp(
+            size,
+            style=self.canvas.brush_style(),
+            hardness=self.canvas.brush_hardness() / 100.0,
+            opacity=self.canvas.brush_opacity() / 100.0,
+        )
+        self._stamp_cache_key = key
+        self._stamp_cache_image = stamp
+        return stamp
 
 
 class RectangleSelectTool(Tool):
@@ -289,11 +345,13 @@ class RectangleSelectTool(Tool):
 
     def mouse_press(self, event) -> bool:
         if event.button() == Qt.LeftButton:
+            self.canvas.selection_polygon = None
             self._selecting = True
             self._start_point = event.pos()
             scene_pos = self.canvas.mapToScene(event.pos())
             self.canvas.selection_rect = (scene_pos.x(), scene_pos.y(), scene_pos.x(), scene_pos.y())
             self._update_rect()
+            self.canvas.notify_selection_changed()
             return True
         return False
 
@@ -307,6 +365,7 @@ class RectangleSelectTool(Tool):
             bottom = max(start_scene.y(), current_scene.y())
             self.canvas.selection_rect = (left, top, right, bottom)
             self._update_rect()
+            self.canvas.notify_selection_changed()
             return True
         return False
 
@@ -355,6 +414,7 @@ class FreeSelectTool(Tool):
 
     def mouse_press(self, event) -> bool:
         if event.button() == Qt.LeftButton:
+            self.canvas.selection_rect = None
             self._selecting = True
             scene_pos = self.canvas.mapToScene(event.pos())
             self._points = [scene_pos]
@@ -365,6 +425,12 @@ class FreeSelectTool(Tool):
     def mouse_move(self, event) -> bool:
         if self._selecting:
             scene_pos = self.canvas.mapToScene(event.pos())
+            if self._points and scene_pos == self._points[-1]:
+                return True
+            if len(self._points) >= 2:
+                last = self._points[-1]
+                if (scene_pos.x() - last.x()) ** 2 + (scene_pos.y() - last.y()) ** 2 < 4:
+                    return True
             self._points.append(scene_pos)
             self._update_polygon()
             return True
@@ -375,6 +441,7 @@ class FreeSelectTool(Tool):
             self._selecting = False
             if self._points:
                 self.canvas.selection_polygon = [p.toPoint() for p in self._points]
+                self.canvas.notify_selection_changed()
             return True
         return False
 
@@ -609,6 +676,7 @@ class CloneStampTool(Tool):
         self._last_point: tuple[int, int] | None = None
         self._source_indicator: QGraphicsEllipseItem | None = None
         self._cursor_item: QGraphicsEllipseItem | None = None
+        self._source_snapshot: Image.Image | None = None
 
     def activate(self) -> None:
         super().activate()
@@ -677,8 +745,12 @@ class CloneStampTool(Tool):
                 return True
             pos = self._view_to_image_pos(event.pos())
             if pos is not None and self._source_point is not None:
+                layer = self.canvas.active_layer()
+                if layer is None or layer.locked:
+                    return False
                 self._drawing = True
                 self._last_point = pos
+                self._source_snapshot = layer.image.copy()
                 self._stamp(pos)
             return True
         return False
@@ -696,32 +768,36 @@ class CloneStampTool(Tool):
         if event.button() == Qt.LeftButton and self._drawing:
             self._drawing = False
             self._last_point = None
+            self._source_snapshot = None
             self._emit_image_changed()
             return True
         return False
 
     def _stamp(self, target: tuple[int, int]) -> None:
-        if self._source_point is None:
+        if self._source_point is None or self._source_snapshot is None:
             return
         layer = self.canvas.active_layer()
-        if layer is None:
+        if layer is None or layer.locked:
             return
         size = max(1, round(self.canvas._brush_size / 2))
         sx, sy = self._source_point
         tx, ty = target
-        dx = tx - sx
-        dy = ty - sy
-        source = layer.image.copy()
-        mask = Image.new("L", layer.image.size, 0)
-        stamp = Image.new("L", (size * 2 + 1, size * 2 + 1), 255)
-        mask.paste(stamp, (tx - size, ty - size))
-        shifted = source.transform(
-            source.size,
-            Image.Transform.AFFINE,
-            (1, 0, dx, 0, 1, dy),
-            resample=Image.Resampling.BILINEAR,
-        )
-        result = Image.composite(shifted, layer.image, mask)
+        width, height = layer.image.size
+        left = max(0, tx - size)
+        top = max(0, ty - size)
+        right = min(width, tx + size + 1)
+        bottom = min(height, ty + size + 1)
+        if right <= left or bottom <= top:
+            return
+        src_left = sx + (left - tx)
+        src_top = sy + (top - ty)
+        src_right = src_left + (right - left)
+        src_bottom = src_top + (bottom - top)
+        if src_left < 0 or src_top < 0 or src_right > width or src_bottom > height:
+            return
+        patch = self._source_snapshot.crop((src_left, src_top, src_right, src_bottom))
+        result = layer.image.copy()
+        result.paste(patch, (left, top), patch if patch.mode == "RGBA" else None)
         layer.image = result
         layer.update_pixmap(self.canvas.scene)
 
@@ -743,7 +819,7 @@ class MoveTool(Tool):
             layer = self.canvas._layers.layer_at(scene_pos.x(), scene_pos.y())
             if layer is None:
                 layer = self.canvas.active_layer()
-            if layer is not None:
+            if layer is not None and not layer.locked:
                 self._moving = True
                 self._start_pos = event.pos()
                 self._start_layer_pos = (layer.x, layer.y)
@@ -800,18 +876,49 @@ class PaintBucketTool(Tool):
     cursor = Qt.PointingHandCursor
 
     def mouse_press(self, event) -> bool:
-        if event.button() == Qt.LeftButton:
-            pos = self._view_to_image_pos(event.pos())
-            if pos is not None:
-                layer = self.canvas.active_layer()
-                if layer is not None and layer.image is not None:
-                    x, y = pos
-                    color = self.canvas.foreground_color()
-                    fill = (color.red(), color.green(), color.blue(), 255)
-                    image = layer.image.copy()
-                    ImageDraw.floodfill(image, (x, y), fill, border=None)
-                    layer.image = image
-                    layer.update_pixmap(self.canvas.scene)
-                    self._emit_image_changed()
-            return True
-        return False
+        if event.button() != Qt.LeftButton:
+            return False
+        pos = self._view_to_image_pos(event.pos())
+        if pos is None:
+            return False
+        layer = self.canvas.active_layer()
+        if layer is None or layer.image is None or layer.locked:
+            return False
+        x, y = pos
+        color = self.canvas.foreground_color()
+        fill = (color.red(), color.green(), color.blue(), 255)
+        layer.image = _flood_fill_rgba(layer.image, x, y, fill, tolerance=32)
+        layer.update_pixmap(self.canvas.scene)
+        self._emit_image_changed()
+        return True
+
+
+def _flood_fill_rgba(
+    image: Image.Image,
+    x: int,
+    y: int,
+    fill: tuple[int, int, int, int],
+    *,
+    tolerance: int = 32,
+) -> Image.Image:
+    data = np.array(image.convert("RGBA"))
+    height, width, _ = data.shape
+    if not (0 <= x < width and 0 <= y < height):
+        return image
+    target = data[y, x].astype(np.int16)
+    fill_arr = np.array(fill, dtype=np.uint8)
+    if np.array_equal(target, fill_arr.astype(np.int16)):
+        return image
+    visited = np.zeros((height, width), dtype=bool)
+    stack = [(x, y)]
+    while stack:
+        cx, cy = stack.pop()
+        if cx < 0 or cy < 0 or cx >= width or cy >= height or visited[cy, cx]:
+            continue
+        pixel = data[cy, cx].astype(np.int16)
+        if np.max(np.abs(pixel - target)) > tolerance:
+            continue
+        visited[cy, cx] = True
+        data[cy, cx] = fill_arr
+        stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+    return Image.fromarray(data, "RGBA")

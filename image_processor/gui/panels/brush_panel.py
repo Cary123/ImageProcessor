@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Brush and eraser settings panel."""
+"""Brush tool settings panel with multiple brush styles."""
 
 from __future__ import annotations
 
@@ -7,23 +7,27 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup,
+    QComboBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QRadioButton,
     QSlider,
     QVBoxLayout,
     QWidget,
 )
 
+from image_processor.gui.brush_modes import BRUSH_STYLES, style_hint, uses_hardness, uses_opacity
+from image_processor.utils.themes import gallery_hint_stylesheet
+
 
 class BrushPanel(QWidget):
-    """Panel for configuring brush/eraser tool."""
+    """Dedicated panel for the paint brush tool."""
 
+    brush_style_changed = Signal(str)
     brush_size_changed = Signal(int)
     brush_hardness_changed = Signal(int)
-    brush_mode_changed = Signal(str)
+    brush_opacity_changed = Signal(int)
     apply_brush = Signal()
     cancel_brush = Signal()
 
@@ -36,28 +40,32 @@ class BrushPanel(QWidget):
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        title = QLabel("橡皮擦 / 画笔")
+        title = QLabel("画笔")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
-        hint = QLabel("在画布上涂抹以擦除或恢复区域。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray; font-size: 12px;")
-        layout.addWidget(hint)
+        self.hint_label = QLabel(
+            "在画布上涂抹以绘制前景色。完成后点击「应用」保留修改，或「取消」恢复原图。"
+        )
+        self.hint_label.setWordWrap(True)
+        self.hint_label.setStyleSheet(gallery_hint_stylesheet())
+        layout.addWidget(self.hint_label)
 
-        mode_layout = QHBoxLayout()
-        self.mode_group = QButtonGroup(self)
-        self.eraser_radio = QRadioButton("橡皮擦")
-        self.brush_radio = QRadioButton("画笔")
-        self.eraser_radio.setChecked(True)
-        self.mode_group.addButton(self.eraser_radio)
-        self.mode_group.addButton(self.brush_radio)
-        mode_layout.addWidget(self.eraser_radio)
-        mode_layout.addWidget(self.brush_radio)
-        mode_layout.addStretch()
-        layout.addLayout(mode_layout)
+        form_layout = QFormLayout()
+        form_layout.setSpacing(8)
 
-        self.mode_group.buttonClicked.connect(self._on_mode_changed)
+        self.style_combo = QComboBox()
+        for style_id, label in BRUSH_STYLES.items():
+            self.style_combo.addItem(label, style_id)
+        self.style_combo.currentIndexChanged.connect(self._on_style_changed)
+        form_layout.addRow("笔刷类型:", self.style_combo)
+
+        self.style_hint_label = QLabel(style_hint("round"))
+        self.style_hint_label.setWordWrap(True)
+        self.style_hint_label.setStyleSheet(gallery_hint_stylesheet())
+        form_layout.addRow(self.style_hint_label)
+
+        layout.addLayout(form_layout)
 
         size_label = QLabel("笔刷大小")
         layout.addWidget(size_label)
@@ -67,13 +75,21 @@ class BrushPanel(QWidget):
         self.size_slider.valueChanged.connect(self._on_size_changed)
         layout.addWidget(self.size_slider)
 
-        hardness_label = QLabel("硬度")
-        layout.addWidget(hardness_label)
+        self.hardness_label = QLabel("硬度")
+        layout.addWidget(self.hardness_label)
         self.hardness_slider = QSlider(Qt.Horizontal)
         self.hardness_slider.setRange(0, 100)
         self.hardness_slider.setValue(100)
         self.hardness_slider.valueChanged.connect(self._on_hardness_changed)
         layout.addWidget(self.hardness_slider)
+
+        self.opacity_label = QLabel("浓度")
+        layout.addWidget(self.opacity_label)
+        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider.setRange(5, 100)
+        self.opacity_slider.setValue(100)
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        layout.addWidget(self.opacity_slider)
 
         layout.addStretch()
 
@@ -87,10 +103,25 @@ class BrushPanel(QWidget):
 
         self.apply_button.clicked.connect(self.apply_brush)
         self.cancel_button.clicked.connect(self.cancel_brush)
+        self._refresh_style_controls()
 
-    def _on_mode_changed(self) -> None:
-        mode = "brush" if self.brush_radio.isChecked() else "eraser"
-        self.brush_mode_changed.emit(mode)
+    def _current_style_id(self) -> str:
+        return self.style_combo.currentData() or "round"
+
+    def _on_style_changed(self) -> None:
+        style_id = self._current_style_id()
+        self.style_hint_label.setText(style_hint(style_id))
+        self._refresh_style_controls()
+        self.brush_style_changed.emit(style_id)
+
+    def _refresh_style_controls(self) -> None:
+        style_id = self._current_style_id()
+        show_hardness = uses_hardness(style_id)
+        show_opacity = uses_opacity(style_id)
+        self.hardness_label.setVisible(show_hardness)
+        self.hardness_slider.setVisible(show_hardness)
+        self.opacity_label.setVisible(show_opacity)
+        self.opacity_slider.setVisible(show_opacity)
 
     def _on_size_changed(self) -> None:
         self.brush_size_changed.emit(self.size_slider.value())
@@ -98,18 +129,17 @@ class BrushPanel(QWidget):
     def _on_hardness_changed(self) -> None:
         self.brush_hardness_changed.emit(self.hardness_slider.value())
 
-    def current_mode(self) -> str:
-        return "brush" if self.brush_radio.isChecked() else "eraser"
-
-    def set_mode(self, mode: str) -> None:
-        if mode == "brush":
-            self.brush_radio.setChecked(True)
-        else:
-            self.eraser_radio.setChecked(True)
+    def _on_opacity_changed(self) -> None:
+        self.brush_opacity_changed.emit(self.opacity_slider.value())
 
     def current_options(self) -> dict[str, Any]:
         return {
-            "mode": self.current_mode(),
+            "style": self._current_style_id(),
             "size": self.size_slider.value(),
             "hardness": self.hardness_slider.value(),
+            "opacity": self.opacity_slider.value(),
         }
+
+    def apply_theme_styles(self) -> None:
+        self.hint_label.setStyleSheet(gallery_hint_stylesheet())
+        self.style_hint_label.setStyleSheet(gallery_hint_stylesheet())

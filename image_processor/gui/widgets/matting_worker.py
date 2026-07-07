@@ -39,6 +39,7 @@ class MattingWorker(QRunnable):
                 model=self.options.get("model", "isnet-general-use"),
                 trim=self.options.get("trim", False),
                 trim_padding=self.options.get("trim_padding", 0),
+                alpha_matting=self.options.get("alpha_matting", False),
                 progress_callback=progress_callback,
             )
             self.signals.finished.emit(result)

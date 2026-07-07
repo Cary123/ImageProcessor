@@ -128,7 +128,9 @@ class CropPanel(QWidget):
         })
 
     def _on_aspect_changed(self, index: int) -> None:
-        if not (self.right_spin.value() and self.bottom_spin.value()):
+        width = self.right_spin.value() - self.left_spin.value()
+        height = self.bottom_spin.value() - self.top_spin.value()
+        if width <= 0 or height <= 0:
             return
 
         ratios = {

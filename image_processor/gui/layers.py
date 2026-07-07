@@ -14,6 +14,7 @@ from PySide6.QtGui import QBrush, QImage, QPixmap
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene
 
 from image_processor.core.image_engine import create_checkerboard
+from image_processor.models.canvas_snapshot import CanvasSnapshot, LayerSnapshot
 
 
 @dataclass
@@ -56,17 +57,34 @@ class Layer:
         if self.item is not None:
             self.item.setOffset(x, y)
 
-    def update_pixmap(self, scene: QGraphicsScene) -> None:
+    def update_pixmap(self, scene: QGraphicsScene, *, image_changed: bool = True) -> None:
         if self.item is None:
             self.item = QGraphicsPixmapItem()
             self.item.setOffset(self.x, self.y)
             scene.addItem(self.item)
-        data = np.array(self.image.convert("RGBA"))
-        height, width, _ = data.shape
-        bytes_per_line = width * 4
-        q_image = QImage(data.data, width, height, bytes_per_line, QImage.Format_RGBA8888)
-        pixmap = QPixmap.fromImage(q_image)
-        self.item.setPixmap(pixmap)
+        if image_changed:
+            data = np.ascontiguousarray(self.image.convert("RGBA"))
+            self._pixmap_buffer = data
+            height, width, _ = data.shape
+            bytes_per_line = width * 4
+            q_image = QImage(
+                self._pixmap_buffer.data,
+                width,
+                height,
+                bytes_per_line,
+                QImage.Format_RGBA8888,
+            ).copy()
+            pixmap = QPixmap.fromImage(q_image)
+            self.item.setPixmap(pixmap)
+        self.item.setOffset(self.x, self.y)
+        self.item.setOpacity(self.opacity)
+        self.item.setVisible(self.visible)
+        self.item.setZValue(self.metadata.get("z", 0))
+
+    def refresh_visual(self) -> None:
+        """Update Qt item opacity/visibility/offset without rebuilding pixmap."""
+        if self.item is None:
+            return
         self.item.setOffset(self.x, self.y)
         self.item.setOpacity(self.opacity)
         self.item.setVisible(self.visible)
@@ -122,8 +140,6 @@ class LayerManager:
             return
         self.layers = [self._checkerboard_layer] + reordered if self._checkerboard_layer is not None else reordered
         self._refresh_z_values()
-        for layer in self.layers:
-            layer.update_pixmap(self.scene)
 
     def set_active_layer(self, layer: Layer | None) -> None:
         if layer is None or layer in self.layers:
@@ -238,8 +254,75 @@ class LayerManager:
             if layer.visible and not layer.metadata.get("is_checkerboard"):
                 paste_x = layer.x - left
                 paste_y = layer.y - top
-                if layer.image.mode == "RGBA":
-                    canvas.paste(layer.image, (paste_x, paste_y), layer.image)
-                else:
-                    canvas.paste(layer.image, (paste_x, paste_y))
+                if layer.opacity >= 0.999:
+                    if layer.image.mode == "RGBA":
+                        canvas.paste(layer.image, (paste_x, paste_y), layer.image)
+                    else:
+                        canvas.paste(layer.image, (paste_x, paste_y))
+                    continue
+                overlay = layer.image.convert("RGBA")
+                alpha = overlay.split()[3]
+                alpha = alpha.point(lambda value: int(value * layer.opacity))
+                overlay.putalpha(alpha)
+                canvas.paste(overlay, (paste_x, paste_y), overlay)
         return canvas
+
+    def capture_snapshot(self, *, active_layer_index: int = 0, checkerboard_size: int = 16) -> CanvasSnapshot:
+        layers = [
+            LayerSnapshot(
+                name=layer.name,
+                image=layer.image.copy(),
+                x=layer.x,
+                y=layer.y,
+                opacity=layer.opacity,
+                visible=layer.visible,
+                locked=layer.locked,
+                metadata=dict(layer.metadata),
+            )
+            for layer in self.image_layers()
+        ]
+        return CanvasSnapshot(
+            layers=layers,
+            active_layer_index=max(0, min(active_layer_index, len(layers) - 1)) if layers else 0,
+            checkerboard_size=checkerboard_size,
+        )
+
+    def restore_snapshot(self, snapshot: CanvasSnapshot) -> None:
+        for layer in list(self.layers):
+            layer.remove_from_scene(self.scene)
+        self.layers.clear()
+        self._checkerboard_layer = None
+        self._selected_layer = None
+
+        if not snapshot.layers:
+            return
+
+        bounds_left = min(layer.x for layer in snapshot.layers)
+        bounds_top = min(layer.y for layer in snapshot.layers)
+        bounds_right = max(layer.x + layer.image.width for layer in snapshot.layers)
+        bounds_bottom = max(layer.y + layer.image.height for layer in snapshot.layers)
+        width = max(1, bounds_right - bounds_left)
+        height = max(1, bounds_bottom - bounds_top)
+        self.set_checkerboard(
+            width,
+            height,
+            cell_size=snapshot.checkerboard_size,
+            x=bounds_left,
+            y=bounds_top,
+        )
+        self.set_scene_rect(width, height)
+
+        for index, layer_state in enumerate(snapshot.layers):
+            layer = Layer(
+                name=layer_state.name,
+                image=layer_state.image.copy(),
+                x=layer_state.x,
+                y=layer_state.y,
+                opacity=layer_state.opacity,
+                visible=layer_state.visible,
+                locked=layer_state.locked,
+                metadata=dict(layer_state.metadata),
+            )
+            self.add_layer(layer)
+            if index == snapshot.active_layer_index:
+                self._selected_layer = layer

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -26,6 +26,10 @@ class AdjustPanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(80)
+        self._preview_timer.timeout.connect(self._emit_preview)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -93,6 +97,9 @@ class AdjustPanel(QWidget):
         }
 
     def _on_preview(self) -> None:
+        self._preview_timer.start()
+
+    def _emit_preview(self) -> None:
         self.adjustment_preview.emit(self._options())
 
     def _on_apply(self) -> None:

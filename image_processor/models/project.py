@@ -9,7 +9,7 @@ from typing import Any
 
 from PIL import Image
 
-from image_processor.core.history_manager import HistoryManager
+from image_processor.core.history_manager import HistoryEntry, HistoryManager
 from image_processor.models.image_item import ImageItem
 
 
@@ -33,9 +33,11 @@ class ProjectImageData:
             metadata=dict(self.metadata),
         )
         item.history.clear()
-        for description, image in self.history_entries:
-            item.history.push(image, description=description)
-        item.history._index = len(self.history_entries) - 1
+        entries = [
+            HistoryEntry(image=image.copy(), description=description)
+            for description, image in self.history_entries
+        ]
+        item.history.load_entries(entries)
         return item
 
 

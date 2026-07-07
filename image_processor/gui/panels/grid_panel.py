@@ -23,6 +23,7 @@ class GridPanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._image_size = (0, 0)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -74,4 +75,5 @@ class GridPanel(QWidget):
         }
 
     def set_image_size(self, width: int, height: int) -> None:
-        pass
+        """Reserved for syncing grid bounds with the active image size."""
+        self._image_size = (max(1, width), max(1, height))

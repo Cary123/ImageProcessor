@@ -12,6 +12,7 @@ from PySide6.QtGui import QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent, Q
 from PySide6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView
 
 from image_processor.gui.layers import Layer, LayerManager
+from image_processor.models.canvas_snapshot import CanvasSnapshot
 from image_processor.gui.tools import (
     BrushTool,
     CloneStampTool,
@@ -39,6 +40,7 @@ class ImageCanvas(QGraphicsView):
     image_changed = Signal(object)
     layers_changed = Signal()
     color_picked = Signal(QColor)
+    selection_changed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -60,7 +62,12 @@ class ImageCanvas(QGraphicsView):
 
         self._brush_size = 20
         self._brush_hardness = 100
+        self._brush_style = "round"
+        self._brush_opacity = 100
         self._brush_original: Image.Image | None = None
+        self._brush_session_active = False
+        self._adjust_preview_active = False
+        self._adjust_preview_base: Image.Image | None = None
 
         self._foreground_color = QColor("#000000")
         self._background_color = QColor("#FFFFFF")
@@ -117,12 +124,14 @@ class ImageCanvas(QGraphicsView):
     def _center_on_checkerboard(self) -> None:
         self.set_zoom_scale(0.5)
 
-    def set_image(self, image: Image.Image) -> None:
+    def set_image(self, image: Image.Image, *, preserve_zoom: bool = False) -> None:
+        zoom = self.transform().m11() if preserve_zoom else None
         self._layers.clear()
-        self._brush_original = image.copy()
+        self._brush_original = None
+        self._brush_session_active = False
         layer = Layer(
             name="图片",
-            image=image,
+            image=image.copy(),
             x=-image.width // 2,
             y=-image.height // 2,
             metadata={"z": 0},
@@ -138,9 +147,33 @@ class ImageCanvas(QGraphicsView):
         )
         self._layers.set_scene_rect(image.width, image.height)
         self._update_grid_overlay()
-        self.set_zoom_scale(0.5)
+        if preserve_zoom and zoom is not None:
+            self.set_zoom_scale(zoom, emit=False)
+        else:
+            self.set_zoom_scale(0.5)
         self.layers_changed.emit()
         self._set_tool("navigator")
+
+    def restore_snapshot(self, snapshot: CanvasSnapshot, *, preserve_zoom: bool = True) -> None:
+        zoom = self.transform().m11() if preserve_zoom else None
+        self._layers.restore_snapshot(snapshot)
+        self._brush_original = None
+        self._brush_session_active = False
+        self._update_grid_overlay()
+        if preserve_zoom and zoom is not None:
+            self.set_zoom_scale(zoom, emit=False)
+        else:
+            self.set_zoom_scale(0.5)
+        self.layers_changed.emit()
+
+    def capture_snapshot(self) -> CanvasSnapshot:
+        layers = self._layers.image_layers()
+        active = self.active_layer()
+        active_index = layers.index(active) if active in layers else 0
+        return self._layers.capture_snapshot(
+            active_layer_index=active_index,
+            checkerboard_size=self._checkerboard_size,
+        )
 
     def clear(self) -> None:
         self._layers.clear()
@@ -192,9 +225,8 @@ class ImageCanvas(QGraphicsView):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.ControlModifier:
-            if self._current_tool_id not in ("brush", "eraser", "clone_stamp"):
-                factor = 1.1 if event.angleDelta().y() > 0 else 0.9
-                self.set_zoom_scale(self.transform().m11() * factor)
+            factor = 1.1 if event.angleDelta().y() > 0 else 0.9
+            self.set_zoom_scale(self.transform().m11() * factor)
             return
         super().wheelEvent(event)
 
@@ -212,6 +244,24 @@ class ImageCanvas(QGraphicsView):
     def set_brush_hardness(self, hardness: int) -> None:
         self._brush_hardness = max(0, min(100, hardness))
 
+    def set_brush_style(self, style: str) -> None:
+        self._brush_style = style or "round"
+
+    def set_brush_opacity(self, opacity: int) -> None:
+        self._brush_opacity = max(5, min(100, opacity))
+
+    def brush_size(self) -> int:
+        return self._brush_size
+
+    def brush_hardness(self) -> int:
+        return self._brush_hardness
+
+    def brush_style(self) -> str:
+        return self._brush_style
+
+    def brush_opacity(self) -> int:
+        return self._brush_opacity
+
     def foreground_color(self) -> QColor:
         return self._foreground_color
 
@@ -224,43 +274,58 @@ class ImageCanvas(QGraphicsView):
     def set_background_color(self, color: QColor) -> None:
         self._background_color = color
 
-    def start_brush_session(self, image: Image.Image, original_image: Image.Image) -> None:
-        self._layers.clear()
-        self._brush_original = original_image.copy()
-        if original_image.size != image.size:
-            self._brush_original = original_image.resize(image.size, Image.Resampling.LANCZOS)
-        layer = Layer(
-            name="图片",
-            image=image.copy(),
-            x=-image.width // 2,
-            y=-image.height // 2,
-            metadata={"z": 0},
-        )
-        self._layers.add_layer(layer)
-        self._layers.set_active_layer(layer)
-        self._layers.set_checkerboard(
-            image.width,
-            image.height,
-            cell_size=self._checkerboard_size,
-            x=-image.width // 2,
-            y=-image.height // 2,
-        )
-        self._layers.set_scene_rect(image.width, image.height)
-        self.layers_changed.emit()
+    def start_brush_session(self) -> None:
+        layer = self.active_layer()
+        if layer is None or layer.locked:
+            return
+        self._brush_original = layer.image.copy()
+        self._brush_session_active = True
 
     def _end_brush_session(self) -> None:
         self._brush_original = None
+        self._brush_session_active = False
 
     def apply_brush(self) -> None:
-        layer = self.active_layer()
-        if layer is not None:
-            self.brush_applied.emit(layer.image.copy())
+        if not self._brush_session_active:
+            return
+        self.brush_applied.emit(self.capture_snapshot())
+        self._end_brush_session()
 
     def cancel_brush(self) -> None:
         layer = self.active_layer()
         if layer is not None and self._brush_original is not None:
             layer.image = self._brush_original.copy()
             layer.update_pixmap(self.scene)
+        self._end_brush_session()
+
+    def begin_adjust_preview(self) -> None:
+        layer = self.active_layer()
+        if layer is None:
+            return
+        self._adjust_preview_base = layer.image.copy()
+        self._adjust_preview_active = True
+
+    def preview_adjust_on_active_layer(self, image: Image.Image) -> None:
+        layer = self.active_layer()
+        if layer is None:
+            return
+        if not self._adjust_preview_active:
+            self.begin_adjust_preview()
+        layer.image = image
+        layer.update_pixmap(self.scene)
+
+    def end_adjust_preview(self, *, restore: bool = False) -> None:
+        if restore and self._adjust_preview_active and self._adjust_preview_base is not None:
+            layer = self.active_layer()
+            if layer is not None:
+                layer.image = self._adjust_preview_base.copy()
+                layer.update_pixmap(self.scene)
+        self._adjust_preview_active = False
+        self._adjust_preview_base = None
+
+    def is_layer_editable(self, layer: Layer | None = None) -> bool:
+        target = layer or self.active_layer()
+        return target is not None and not target.locked
 
     def _set_tool(self, tool_id: str) -> None:
         if tool_id not in self._tools:
@@ -313,7 +378,7 @@ class ImageCanvas(QGraphicsView):
         layers = self._layers.image_layers()
         if 0 <= index < len(layers):
             layers[index].visible = not layers[index].visible
-            layers[index].update_pixmap(self.scene)
+            layers[index].refresh_visual()
             self.layers_changed.emit()
             self._update_grid_overlay()
 
@@ -321,7 +386,7 @@ class ImageCanvas(QGraphicsView):
         layers = self._layers.image_layers()
         if 0 <= index < len(layers):
             layers[index].opacity = opacity / 100.0
-            layers[index].update_pixmap(self.scene)
+            layers[index].refresh_visual()
 
     def rename_layer(self, index: int, name: str) -> None:
         layers = self._layers.image_layers()
@@ -329,21 +394,28 @@ class ImageCanvas(QGraphicsView):
             layers[index].name = name
             self.layers_changed.emit()
 
-    def set_all_visible_layers_opacity(self, opacity: int) -> None:
-        for layer in self._layers.image_layers():
-            if layer.visible:
-                layer.opacity = opacity / 100.0
-                layer.update_pixmap(self.scene)
+    def set_all_visible_layers_opacity(self, index: int, opacity: int) -> None:
+        self.set_layer_opacity(index, opacity)
+
+    def active_layer_opacity(self) -> int:
+        layer = self.active_layer()
+        if layer is None:
+            return 100
+        return int(round(layer.opacity * 100))
 
     def reorder_image_layers(self, new_order: list[int]) -> None:
         self._layers.reorder_image_layers(new_order)
         self.layers_changed.emit()
         self._update_grid_overlay()
 
-    def copy_selection(self) -> None:
+    def notify_selection_changed(self) -> None:
+        self.selection_changed.emit()
+
+    def copy_selection(self) -> bool:
         layer = self.active_layer()
         if layer is None:
-            return
+            return False
+        copied = False
         if self.selection_rect is not None:
             left, top, right, bottom = self.selection_rect
             left = int(left - layer.x)
@@ -356,6 +428,7 @@ class ImageCanvas(QGraphicsView):
             bottom = min(layer.height, bottom)
             if right > left and bottom > top:
                 self._clipboard_layer = layer.image.crop((left, top, right, bottom))
+                copied = True
         elif self.selection_polygon is not None and len(self.selection_polygon) > 2:
             poly = [(int(p.x() - layer.x), int(p.y() - layer.y)) for p in self.selection_polygon]
             mask = Image.new("L", layer.image.size, 0)
@@ -368,6 +441,8 @@ class ImageCanvas(QGraphicsView):
                 result = Image.new("RGBA", cropped.size, (0, 0, 0, 0))
                 result.paste(cropped, (0, 0), mask_crop)
                 self._clipboard_layer = result
+                copied = True
+        return copied
 
     def paste_selection(self) -> Image.Image | None:
         pasted = self._clipboard_layer

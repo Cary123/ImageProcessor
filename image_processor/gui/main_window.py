@@ -32,6 +32,8 @@ from image_processor.core.project_manager import ProjectError, ProjectManager
 from image_processor.gui.canvas import ImageCanvas
 from image_processor.gui.panels.adjust_panel import AdjustPanel
 from image_processor.gui.panels.brush_panel import BrushPanel
+from image_processor.gui.panels.eraser_panel import EraserPanel
+from image_processor.gui.panels.interactive_tool_panel import InteractiveToolPanel, INTERACTIVE_TOOLS
 from image_processor.gui.panels.crop_panel import CropPanel
 from image_processor.gui.panels.grid_panel import GridPanel
 from image_processor.gui.panels.inpaint_panel import InpaintPanel
@@ -43,10 +45,12 @@ from image_processor.gui.widgets.batch_dialog import BatchDialog
 from image_processor.gui.widgets.color_bar import ColorBar
 from image_processor.gui.widgets.compare_dialog import CompareDialog
 from image_processor.gui.widgets.image_gallery import ImageGallery
+from image_processor.gui.widgets.engine_workers import InpaintWorker, ResizeWorker
 from image_processor.gui.widgets.matting_worker import MattingWorker
 from image_processor.gui.widgets.slider_compare import SliderCompareDialog
 from image_processor.gui.widgets.sprite_editor import SpriteEditor
 from image_processor.gui.widgets.toast import Toast
+from image_processor.models.canvas_snapshot import CanvasSnapshot
 from image_processor.models.image_item import ImageItem
 from image_processor.utils.helpers import collect_images, is_matting_model_available
 from image_processor.utils.recent_files import RecentFilesManager
@@ -68,11 +72,14 @@ class MainWindow(QMainWindow):
         self.current_index = -1
         self.recent_files = RecentFilesManager()
         self._matting_item: ImageItem | None = None
+        self._matting_index: int = -1
+        self._active_engine_workers = 0
 
         self._build_ui()
         self._connect_signals()
         self._apply_editor_theme_styles()
         self._update_status()
+        self._on_tool_selected("move")
         self.canvas.setFocus()
 
     def _build_ui(self) -> None:
@@ -185,7 +192,9 @@ class MainWindow(QMainWindow):
         self.resize_panel = ResizePanel()
         self.crop_panel = CropPanel()
         self.inpaint_panel = InpaintPanel()
+        self.interactive_tool_panel = InteractiveToolPanel()
         self.brush_panel = BrushPanel()
+        self.eraser_panel = EraserPanel()
         self.grid_panel = GridPanel()
         self.adjust_panel = AdjustPanel()
 
@@ -193,7 +202,9 @@ class MainWindow(QMainWindow):
         self.panel_stack.addWidget(self.resize_panel)
         self.panel_stack.addWidget(self.crop_panel)
         self.panel_stack.addWidget(self.inpaint_panel)
+        self.panel_stack.addWidget(self.interactive_tool_panel)
         self.panel_stack.addWidget(self.brush_panel)
+        self.panel_stack.addWidget(self.eraser_panel)
         self.panel_stack.addWidget(self.grid_panel)
         self.panel_stack.addWidget(self.adjust_panel)
 
@@ -332,6 +343,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         self.canvas.color_picked.connect(self.color_bar.set_active_color)
+        self.canvas.color_picked.connect(self.interactive_tool_panel.set_picked_color)
 
         self.color_bar.foreground_changed.connect(self.canvas.set_foreground_color)
         self.color_bar.background_changed.connect(self.canvas.set_background_color)
@@ -353,11 +365,20 @@ class MainWindow(QMainWindow):
         self.crop_panel.request_rotate.connect(self._run_rotate)
         self.crop_panel.request_flip.connect(self._run_flip)
         self.inpaint_panel.request_inpaint.connect(self._run_inpaint)
-        self.brush_panel.brush_mode_changed.connect(self._on_brush_mode_changed)
+        self.brush_panel.brush_style_changed.connect(self.canvas.set_brush_style)
         self.brush_panel.brush_size_changed.connect(self.canvas.set_brush_size)
         self.brush_panel.brush_hardness_changed.connect(self.canvas.set_brush_hardness)
+        self.brush_panel.brush_opacity_changed.connect(self.canvas.set_brush_opacity)
         self.brush_panel.apply_brush.connect(self.canvas.apply_brush)
         self.brush_panel.cancel_brush.connect(self.canvas.cancel_brush)
+
+        self.eraser_panel.brush_size_changed.connect(self.canvas.set_brush_size)
+        self.eraser_panel.brush_hardness_changed.connect(self.canvas.set_brush_hardness)
+        self.eraser_panel.apply_brush.connect(self.canvas.apply_brush)
+        self.eraser_panel.cancel_brush.connect(self.canvas.cancel_brush)
+
+        self.interactive_tool_panel.brush_size_changed.connect(self.canvas.set_brush_size)
+        self.canvas.selection_changed.connect(self._on_selection_changed)
         self.canvas.brush_applied.connect(self._on_brush_applied)
         self.canvas.image_changed.connect(self._on_canvas_image_changed)
         self.adjust_panel.adjustment_preview.connect(self._preview_adjust)
@@ -379,6 +400,7 @@ class MainWindow(QMainWindow):
 
     def _on_layer_selected(self, row: int) -> None:
         self.canvas.set_active_layer(self._panel_row_to_canvas(row))
+        self.layers_panel.update_opacity(self.canvas.active_layer_opacity())
 
     def _on_layer_visibility_changed(self, row: int) -> None:
         self.canvas.toggle_layer_visibility(self._panel_row_to_canvas(row))
@@ -393,7 +415,9 @@ class MainWindow(QMainWindow):
         self.canvas.add_new_layer()
 
     def _on_layer_opacity_changed(self, opacity: int) -> None:
-        self.canvas.set_all_visible_layers_opacity(opacity)
+        row = self.layers_panel.list_widget.currentRow()
+        if row >= 0:
+            self.canvas.set_layer_opacity(self._panel_row_to_canvas(row), opacity)
 
     def _on_layers_reordered(self, new_panel_order: list[int]) -> None:
         self.canvas.reorder_image_layers(list(reversed(new_panel_order)))
@@ -406,17 +430,84 @@ class MainWindow(QMainWindow):
         canvas_index = layers.index(active) if active is not None and active in layers else 0
         selected_row = len(layers) - 1 - canvas_index
         self.layers_panel.set_layers(names, visibilities, selected_row)
+        self.layers_panel.update_opacity(self.canvas.active_layer_opacity())
+
+    def _commit_canvas_state(self, item: ImageItem, *, description: str) -> None:
+        snapshot = self.canvas.capture_snapshot()
+        item.replace_from_snapshot(snapshot, description=description)
+        self._update_gallery()
+
+    def _restore_entry_to_canvas(self, item: ImageItem) -> None:
+        entry = item.history.current()
+        if entry is None:
+            return
+        snapshot = item.history.to_canvas_snapshot(entry)
+        if snapshot is None:
+            self.canvas.set_image(item.image, preserve_zoom=True)
+            return
+        item.image = entry.image.copy()
+        self.canvas.restore_snapshot(snapshot, preserve_zoom=True)
+
+    def _merged_working_image(self) -> Image.Image:
+        return self.canvas.export_image()
+
+    def _crop_box_on_export(self) -> tuple[int, int, int, int] | None:
+        box = self.canvas.get_crop_box()
+        if box is None:
+            return None
+        layer = self.canvas.active_layer()
+        rect = self.canvas._layers.image_rect()
+        if layer is None or rect is None:
+            return box
+        left, top, _, _ = rect
+        l, t, r, b = box
+        return (l + layer.x - left, t + layer.y - top, r + layer.x - left, b + layer.y - top)
+
+    def _apply_engine_result(self, result: Image.Image, *, description: str) -> None:
+        if not self.images or self.current_index < 0:
+            return
+        item = self.images[self.current_index]
+        item.replace(result, description=description)
+        self.canvas.set_image(result)
+        self.crop_panel.set_image_size(result.width, result.height)
+        self.grid_panel.set_image_size(result.width, result.height)
+        self._update_gallery()
 
     def _on_canvas_image_changed(self, image: Image.Image) -> None:
         if not self.images or self.current_index < 0:
             return
         item = self.images[self.current_index]
-        if item.image.tobytes() != image.tobytes():
-            item.replace(image, description="编辑")
+        snapshot = self.canvas.capture_snapshot()
+        merged = snapshot.merged_image()
+        if item.image.tobytes() != merged.tobytes():
+            item.replace_from_snapshot(snapshot, description="编辑")
+            self._update_gallery()
 
-    def _on_brush_mode_changed(self, mode: str) -> None:
-        self.canvas.set_brush_mode(mode)
-        self.toolbar.set_tool_checked(mode)
+    def _sync_tool_panels_from_canvas(self, tool: str) -> None:
+        size = self.canvas.brush_size()
+        hardness = self.canvas.brush_hardness()
+        if tool == "brush":
+            self.brush_panel.size_slider.blockSignals(True)
+            self.brush_panel.size_slider.setValue(size)
+            self.brush_panel.size_slider.blockSignals(False)
+            self.brush_panel.hardness_slider.blockSignals(True)
+            self.brush_panel.hardness_slider.setValue(hardness)
+            self.brush_panel.hardness_slider.blockSignals(False)
+            self.brush_panel.opacity_slider.blockSignals(True)
+            self.brush_panel.opacity_slider.setValue(self.canvas.brush_opacity())
+            self.brush_panel.opacity_slider.blockSignals(False)
+        elif tool == "eraser":
+            self.eraser_panel.size_slider.blockSignals(True)
+            self.eraser_panel.size_slider.setValue(size)
+            self.eraser_panel.size_slider.blockSignals(False)
+            self.eraser_panel.hardness_slider.blockSignals(True)
+            self.eraser_panel.hardness_slider.setValue(hardness)
+            self.eraser_panel.hardness_slider.blockSignals(False)
+        elif tool == "clone_stamp":
+            self.interactive_tool_panel.set_brush_size(size)
+
+    def _on_selection_changed(self) -> None:
+        self.interactive_tool_panel.refresh_selection(self.canvas)
 
     def _on_tool_selected(self, tool: str) -> None:
         if tool == "sprite":
@@ -429,25 +520,51 @@ class MainWindow(QMainWindow):
             "resize": 1,
             "crop": 2,
             "inpaint": 3,
-            "brush": 4,
-            "eraser": 4,
+            "move": 4,
             "rect_select": 4,
             "free_select": 4,
             "clone_stamp": 4,
-            "move": 4,
             "eyedropper": 4,
             "paint_bucket": 4,
-            "grid": 5,
-            "adjust": 6,
+            "brush": 5,
+            "eraser": 6,
+            "grid": 7,
+            "adjust": 8,
         }
         self.panel_stack.setCurrentIndex(mapping.get(tool, 0))
-        if self.right_tabs.currentIndex() != 0:
+
+        layer_tab_tools = frozenset({"move", "rect_select", "free_select"})
+        if tool not in layer_tab_tools and self.right_tabs.currentIndex() != 0:
             self.right_tabs.setCurrentIndex(0)
-        if tool in ("brush", "eraser"):
-            self.brush_panel.set_mode("brush" if tool == "brush" else "eraser")
-            self.canvas.set_brush_mode("brush" if tool == "brush" else "eraser")
+
+        if tool not in ("brush", "eraser") and self.canvas._brush_session_active:
+            self.canvas.cancel_brush()
+
+        if tool in INTERACTIVE_TOOLS:
+            self.interactive_tool_panel.set_active_tool(tool)
+
+        if tool == "brush":
+            self.canvas.set_brush_mode("brush")
+            self.canvas.end_adjust_preview(restore=False)
+            self._sync_tool_panels_from_canvas(tool)
+            self.canvas.set_brush_style(self.brush_panel.current_options()["style"])
+            self.canvas.set_brush_opacity(self.brush_panel.current_options()["opacity"])
+            self.canvas.start_brush_session()
+        elif tool == "eraser":
+            self.canvas.set_brush_mode("eraser")
+            self.canvas.end_adjust_preview(restore=False)
+            self._sync_tool_panels_from_canvas(tool)
+            self.canvas.start_brush_session()
         else:
             self.canvas.set_brush_mode(None)
+            if tool == "clone_stamp":
+                self._sync_tool_panels_from_canvas(tool)
+            if tool == "adjust":
+                self.canvas.begin_adjust_preview()
+            else:
+                self.canvas.end_adjust_preview(restore=True)
+        if tool in ("matting", "resize", "inpaint", "adjust", "grid"):
+            self.canvas.set_tool("navigator")
         if tool in ("rect_select", "free_select", "crop", "clone_stamp", "move", "eyedropper", "paint_bucket"):
             self.canvas.set_tool(tool)
         elif tool == "navigator":
@@ -455,6 +572,8 @@ class MainWindow(QMainWindow):
 
         self.toolbar.set_tool_checked(tool)
         self.color_bar.set_tool_checked(tool)
+        if tool in ("rect_select", "free_select"):
+            self.interactive_tool_panel.refresh_selection(self.canvas)
         if tool == "grid" and 0 <= self.current_index < len(self.images):
             self.canvas.set_grid_options(self.grid_panel.current_options())
         if tool == "crop" and 0 <= self.current_index < len(self.images):
@@ -468,10 +587,8 @@ class MainWindow(QMainWindow):
                 self.crop_panel.bottom_spin.value() - item.height // 2,
             )
             self.canvas.refresh_crop_tool()
-        if tool == "brush" and 0 <= self.current_index < len(self.images):
-            item = self.images[self.current_index]
-            original = item.history._stack[0].image if item.history._stack else item.image
-            self.canvas.start_brush_session(item.image, original)
+        if tool in ("brush", "eraser") and 0 <= self.current_index < len(self.images):
+            pass
 
     def _update_recent_menu(self) -> None:
         self.recent_menu.clear()
@@ -577,7 +694,7 @@ class MainWindow(QMainWindow):
 
     def _show_current_image(self) -> None:
         if 0 <= self.current_index < len(self.images):
-            self.canvas.set_image(self.images[self.current_index].image)
+            self._restore_entry_to_canvas(self.images[self.current_index])
             self.gallery.setCurrentRow(self.current_index)
         else:
             self.canvas.clear()
@@ -610,21 +727,25 @@ class MainWindow(QMainWindow):
         if not self.images or self.current_index < 0:
             return
         item = self.images[self.current_index]
-        if item.undo():
-            self.canvas.set_image(item.image)
-            self._show_toast(f"已撤销: {item.history.current_description}")
-        else:
+        entry = item.undo()
+        if entry is None:
             self._show_toast("没有可撤销的操作")
+            return
+        self._restore_entry_to_canvas(item)
+        self._update_gallery()
+        self._show_toast(f"已撤销: {entry.description}")
 
     def _redo(self) -> None:
         if not self.images or self.current_index < 0:
             return
         item = self.images[self.current_index]
-        if item.redo():
-            self.canvas.set_image(item.image)
-            self._show_toast(f"已重做: {item.history.current_description}")
-        else:
+        entry = item.redo()
+        if entry is None:
             self._show_toast("没有可重做的操作")
+            return
+        self._restore_entry_to_canvas(item)
+        self._update_gallery()
+        self._show_toast(f"已重做: {entry.description}")
 
     def _update_status(self) -> None:
         total = len(self.images)
@@ -684,16 +805,18 @@ class MainWindow(QMainWindow):
             self.status_coord_label.setText(f"{x}, {y} px")
 
     def _copy_selection(self) -> None:
-        self.canvas.copy_selection()
-        self._show_toast("已复制选区")
+        if self.canvas.copy_selection():
+            self._show_toast("已复制选区")
+        else:
+            self._show_toast("没有可复制的选区")
 
     def _paste_selection(self) -> None:
         pasted = self.canvas.paste_selection()
         if pasted is not None:
             self._show_toast(f"已粘贴图层: {pasted.width}x{pasted.height}")
-            self._on_canvas_image_changed(self.canvas.export_image())
-            self.canvas.set_tool("move")
-            self.toolbar.set_tool_checked("move")
+            if 0 <= self.current_index < len(self.images):
+                self._commit_canvas_state(self.images[self.current_index], description="粘贴图层")
+            self._on_tool_selected("move")
         else:
             self._show_toast("剪贴板为空")
 
@@ -723,11 +846,12 @@ class MainWindow(QMainWindow):
             return
 
         item = self.images[self.current_index]
-        if not item.history._stack:
+        original = item.history.original()
+        if original is None:
             QMessageBox.information(self, "提示", "没有原图可用于对比")
             return
 
-        before = item.history._stack[0].image
+        before = original
         after = item.image
         dialog = CompareDialog(before, after, self)
         dialog.exec()
@@ -738,11 +862,12 @@ class MainWindow(QMainWindow):
             return
 
         item = self.images[self.current_index]
-        if not item.history._stack:
+        original = item.history.original()
+        if original is None:
             QMessageBox.information(self, "提示", "没有原图可用于对比")
             return
 
-        before = item.history._stack[0].image
+        before = original
         after = item.image
         dialog = SliderCompareDialog(before, after, self)
         dialog.exec()
@@ -753,6 +878,9 @@ class MainWindow(QMainWindow):
         self.color_bar.refresh_theme()
         self.toolbar.refresh_icons()
         self.right_tabs.setStyleSheet(side_panel_tab_stylesheet())
+        self.interactive_tool_panel.apply_theme_styles()
+        self.brush_panel.apply_theme_styles()
+        self.eraser_panel.apply_theme_styles()
         self.sprite_editor.zoom_combo.apply_theme_styles()
         self.prev_button.setIcon(get_icon("prev", size=20))
         self.next_button.setIcon(get_icon("next", size=20))
@@ -827,68 +955,85 @@ class MainWindow(QMainWindow):
 
         item = self.images[self.current_index]
         self._matting_item = item
+        self._matting_index = self.current_index
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.status_bar.showMessage("正在抠图...")
 
-        worker = MattingWorker(item.image, options)
+        worker = MattingWorker(self._merged_working_image(), options)
         worker.signals.progress.connect(self.progress_bar.setValue, type=Qt.QueuedConnection)
         worker.signals.finished.connect(self._on_matting_finished, type=Qt.QueuedConnection)
         worker.signals.error.connect(self._on_matting_error, type=Qt.QueuedConnection)
         self.thread_pool.start(worker)
 
     def _on_matting_finished(self, result: object) -> None:
-        if self._matting_item is None:
+        if self._matting_item is None or self._matting_index < 0:
             self.progress_bar.setVisible(False)
             return
-        self._matting_item.replace(result, description="抠图")
-        self.canvas.set_image(result)
+        if self._matting_index != self.current_index or self.images[self._matting_index] is not self._matting_item:
+            self.progress_bar.setVisible(False)
+            self._matting_item = None
+            self._matting_index = -1
+            self.status_bar.showMessage("抠图完成（已切换图片，结果已忽略）", 5000)
+            return
+        self._apply_engine_result(result, description="抠图")
         self._show_toast("抠图完成")
         self.status_bar.showMessage("抠图完成", 5000)
         self.progress_bar.setVisible(False)
         self._matting_item = None
+        self._matting_index = -1
 
     def _on_matting_error(self, message: str) -> None:
         QMessageBox.critical(self, "抠图失败", message)
         self.progress_bar.setVisible(False)
+        self._matting_item = None
+        self._matting_index = -1
 
     def _run_resize(self, options: dict[str, Any]) -> None:
         if not self.images or self.current_index < 0:
             QMessageBox.information(self, "提示", "请先打开一张图片")
             return
 
-        from image_processor.core.image_engine import resize_image
+        image = self._merged_working_image()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+        self.status_bar.showMessage("正在缩放...")
+        worker = ResizeWorker(image, options)
+        worker.signals.finished.connect(self._on_resize_finished, type=Qt.QueuedConnection)
+        worker.signals.error.connect(self._on_resize_error, type=Qt.QueuedConnection)
+        self._active_engine_workers += 1
+        self.thread_pool.start(worker)
 
-        item = self.images[self.current_index]
-        try:
-            result = resize_image(
-                item.image,
-                width=options.get("width") or None,
-                height=options.get("height") or None,
-                percentage=options.get("percentage") or None,
-                interpolation=options.get("interpolation", "LANCZOS"),
-            )
-            item.replace(result, description="缩放")
-            self.canvas.set_image(result)
+    def _on_resize_finished(self, result: object) -> None:
+        self._active_engine_workers = max(0, self._active_engine_workers - 1)
+        self.progress_bar.setVisible(False)
+        if isinstance(result, Image.Image):
+            self._apply_engine_result(result, description="缩放")
             self._show_toast(f"缩放完成: {result.width}x{result.height}")
             self.status_bar.showMessage(f"缩放完成: {result.width}x{result.height}", 5000)
-        except EngineError as exc:
-            QMessageBox.critical(self, "缩放失败", str(exc))
+
+    def _on_resize_error(self, message: str) -> None:
+        self._active_engine_workers = max(0, self._active_engine_workers - 1)
+        self.progress_bar.setVisible(False)
+        QMessageBox.critical(self, "缩放失败", message)
 
     def _preview_adjust(self, options: dict[str, Any]) -> None:
         if not self.images or self.current_index < 0:
             return
-        image = self._apply_adjust_to_image(self.images[self.current_index].image, options)
-        self.canvas.set_image(image)
+        base = self.images[self.current_index].image
+        image = self._apply_adjust_to_image(base, options)
+        self.canvas.preview_adjust_on_active_layer(image)
 
     def _apply_adjust(self, options: dict[str, Any]) -> None:
         if not self.images or self.current_index < 0:
             return
         item = self.images[self.current_index]
         image = self._apply_adjust_to_image(item.image, options)
+        self.canvas.end_adjust_preview(restore=False)
         item.replace(image, description="色彩调整")
-        self.canvas.set_image(image)
+        self.canvas.set_image(image, preserve_zoom=True)
+        self._update_gallery()
         self._show_toast("色彩调整已应用")
         self.status_bar.showMessage("色彩调整已应用", 3000)
 
@@ -929,15 +1074,13 @@ class MainWindow(QMainWindow):
         from image_processor.core.image_engine import crop_image
 
         item = self.images[self.current_index]
-        box = options.get("box") or self.canvas.get_crop_box()
+        box = options.get("box") or self._crop_box_on_export()
         if box is None:
             QMessageBox.information(self, "提示", "请先在画布上拖拽选择裁剪区域")
             return
         try:
-            result = crop_image(item.image, box=box)
-            item.replace(result, description="裁剪")
-            self.canvas.set_image(result)
-            self.crop_panel.set_image_size(result.width, result.height)
+            result = crop_image(self._merged_working_image(), box=box)
+            self._apply_engine_result(result, description="裁剪")
             self._show_toast(f"裁剪完成: {result.width}x{result.height}")
             self.status_bar.showMessage(f"裁剪完成: {result.width}x{result.height}", 5000)
         except EngineError as exc:
@@ -950,12 +1093,9 @@ class MainWindow(QMainWindow):
 
         from image_processor.core.image_engine import rotate_image
 
-        item = self.images[self.current_index]
         try:
-            result = rotate_image(item.image, angle=options["angle"], expand=True)
-            item.replace(result, description="旋转")
-            self.canvas.set_image(result)
-            self.crop_panel.set_image_size(result.width, result.height)
+            result = rotate_image(self._merged_working_image(), angle=options["angle"], expand=True)
+            self._apply_engine_result(result, description="旋转")
             self._show_toast(f"旋转完成: {result.width}x{result.height}")
             self.status_bar.showMessage(f"旋转完成: {result.width}x{result.height}", 5000)
         except EngineError as exc:
@@ -968,49 +1108,57 @@ class MainWindow(QMainWindow):
 
         from image_processor.core.image_engine import flip_image
 
-        item = self.images[self.current_index]
         try:
-            result = flip_image(item.image, horizontal=options.get("horizontal", False), vertical=options.get("vertical", False))
-            item.replace(result, description="翻转")
-            self.canvas.set_image(result)
+            result = flip_image(
+                self._merged_working_image(),
+                horizontal=options.get("horizontal", False),
+                vertical=options.get("vertical", False),
+            )
+            self._apply_engine_result(result, description="翻转")
             self._show_toast("翻转完成")
             self.status_bar.showMessage("翻转完成", 5000)
         except EngineError as exc:
             QMessageBox.critical(self, "翻转失败", str(exc))
 
-    def _on_brush_applied(self, result: object) -> None:
-        if not self.images or self.current_index < 0:
+    def _on_brush_applied(self, snapshot: object) -> None:
+        if not self.images or self.current_index < 0 or not isinstance(snapshot, CanvasSnapshot):
             return
         item = self.images[self.current_index]
-        if item.image.tobytes() != result.tobytes():
-            item.replace(result, description="画笔修复")
-        original = item.history._stack[0].image if item.history._stack else item.image
-        self.canvas.start_brush_session(item.image, original)
-        self._show_toast("画笔修复已应用")
-        self.status_bar.showMessage("画笔修复已应用", 5000)
+        tool = self.canvas.current_tool()
+        description = "橡皮擦" if tool == "eraser" else "画笔"
+        item.replace_from_snapshot(snapshot, description=description)
+        self._update_gallery()
+        self.canvas.start_brush_session()
+        self._show_toast(f"{description}修改已应用")
+        self.status_bar.showMessage(f"{description}修改已应用", 5000)
 
     def _run_inpaint(self, options: dict[str, Any]) -> None:
         if not self.images or self.current_index < 0:
             QMessageBox.information(self, "提示", "请先打开一张图片")
             return
 
-        from image_processor.core.image_engine import inpaint_image
+        image = self._merged_working_image()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+        self.status_bar.showMessage("正在内容感知擦除...")
+        worker = InpaintWorker(image, options)
+        worker.signals.finished.connect(self._on_inpaint_finished, type=Qt.QueuedConnection)
+        worker.signals.error.connect(self._on_inpaint_error, type=Qt.QueuedConnection)
+        self._active_engine_workers += 1
+        self.thread_pool.start(worker)
 
-        item = self.images[self.current_index]
-        mask_path = Path(options["mask_path"])
-        try:
-            result = inpaint_image(
-                item.image,
-                mask_path,
-                radius=options.get("radius", 5),
-                method=options.get("method", "NS"),
-            )
-            item.replace(result, description="内容感知擦除")
-            self.canvas.set_image(result)
+    def _on_inpaint_finished(self, result: object) -> None:
+        self._active_engine_workers = max(0, self._active_engine_workers - 1)
+        self.progress_bar.setVisible(False)
+        if isinstance(result, Image.Image):
+            self._apply_engine_result(result, description="内容感知擦除")
             self._show_toast("内容感知擦除完成")
             self.status_bar.showMessage("内容感知擦除完成", 5000)
-        except EngineError as exc:
-            QMessageBox.critical(self, "擦除失败", str(exc))
+
+    def _on_inpaint_error(self, message: str) -> None:
+        self._active_engine_workers = max(0, self._active_engine_workers - 1)
+        self.progress_bar.setVisible(False)
+        QMessageBox.critical(self, "擦除失败", message)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -1029,4 +1177,5 @@ class MainWindow(QMainWindow):
             self._load_image_items(paths)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.thread_pool.waitForDone(3000)
         event.accept()

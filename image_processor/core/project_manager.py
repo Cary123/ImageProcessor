@@ -116,7 +116,7 @@ class ProjectManager:
         for item in items:
             entries = [
                 (entry.description, entry.image.copy())
-                for entry in item.history._stack
+                for entry in item.history.entries()
             ]
             images_data.append(
                 ProjectImageData(
